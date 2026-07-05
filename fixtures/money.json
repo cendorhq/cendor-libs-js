@@ -1,0 +1,72 @@
+{
+  "spec": "events/1",
+  "money": {
+    "construct_str": {
+      "amount": "0.0025",
+      "currency": "USD"
+    },
+    "construct_float": {
+      "amount": "0.1",
+      "currency": "USD"
+    },
+    "construct_int": {
+      "amount": "5",
+      "currency": "USD"
+    },
+    "zero": {
+      "amount": "0",
+      "currency": "USD"
+    },
+    "zero_eur": {
+      "amount": "0",
+      "currency": "EUR"
+    },
+    "add": {
+      "amount": "0.0035",
+      "currency": "USD"
+    },
+    "sub": {
+      "amount": "0.0015",
+      "currency": "USD"
+    },
+    "mul_int": {
+      "amount": "0.0075",
+      "currency": "USD"
+    },
+    "mul_decimal": {
+      "amount": "0.00625",
+      "currency": "USD"
+    },
+    "str_form": "0.0025 USD",
+    "lt": false,
+    "gt": true,
+    "le_eq": true,
+    "eq_trailing_zeros": true
+  },
+  "currencyMismatchRaises": true,
+  "usage": [
+    {
+      "init": {
+        "input_tokens": 1000,
+        "output_tokens": 500
+      },
+      "total": 1500
+    },
+    {
+      "init": {
+        "input_tokens": 1000,
+        "output_tokens": 500,
+        "cached_tokens": 200,
+        "reasoning_tokens": 100,
+        "cache_write": 50
+      },
+      "total": 1500
+    },
+    {
+      "init": {
+        "input_tokens": 0
+      },
+      "total": 0
+    }
+  ]
+}

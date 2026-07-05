@@ -1,0 +1,188 @@
+{
+  "spec": "prices/1",
+  "snapshotDate": "2026-06-26",
+  "models": [
+    "claude-haiku-4-5",
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "gemini-1.5-pro",
+    "gemini-2.0-flash",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gpt-3.5-turbo",
+    "gpt-4-turbo",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "llama3",
+    "o1",
+    "o1-mini",
+    "o3",
+    "o3-mini",
+    "o4-mini"
+  ],
+  "cases": [
+    {
+      "model": "gpt-4o",
+      "inputTokens": 1000,
+      "outputTokens": 500,
+      "cachedTokens": 0,
+      "cacheWriteTokens": 0,
+      "cost": {
+        "amount": "0.007500000",
+        "currency": "USD"
+      },
+      "costStr": "0.007500000 USD"
+    },
+    {
+      "model": "gpt-4o",
+      "inputTokens": 1000,
+      "outputTokens": 0,
+      "cachedTokens": 0,
+      "cacheWriteTokens": 0,
+      "cost": {
+        "amount": "0.002500000",
+        "currency": "USD"
+      },
+      "costStr": "0.002500000 USD"
+    },
+    {
+      "model": "gpt-4o",
+      "inputTokens": 1000,
+      "outputTokens": 500,
+      "cachedTokens": 200,
+      "cacheWriteTokens": 0,
+      "cost": {
+        "amount": "0.007250000",
+        "currency": "USD"
+      },
+      "costStr": "0.007250000 USD"
+    },
+    {
+      "model": "gpt-4o",
+      "inputTokens": 1000,
+      "outputTokens": 500,
+      "cachedTokens": 0,
+      "cacheWriteTokens": 100,
+      "cost": {
+        "amount": "0.007812500",
+        "currency": "USD"
+      },
+      "costStr": "0.007812500 USD"
+    },
+    {
+      "model": "gpt-4o",
+      "inputTokens": 1000,
+      "outputTokens": 500,
+      "cachedTokens": 2000,
+      "cacheWriteTokens": 0,
+      "cost": {
+        "amount": "0.006250000",
+        "currency": "USD"
+      },
+      "costStr": "0.006250000 USD"
+    },
+    {
+      "model": "gpt-4o-mini",
+      "inputTokens": 12345,
+      "outputTokens": 6789,
+      "cachedTokens": 0,
+      "cacheWriteTokens": 0,
+      "cost": {
+        "amount": "0.0059251500",
+        "currency": "USD"
+      },
+      "costStr": "0.0059251500 USD"
+    },
+    {
+      "model": "claude-opus-4-8",
+      "inputTokens": 2000,
+      "outputTokens": 1000,
+      "cachedTokens": 500,
+      "cacheWriteTokens": 300,
+      "cost": {
+        "amount": "0.03462500",
+        "currency": "USD"
+      },
+      "costStr": "0.03462500 USD"
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "inputTokens": 100,
+      "outputTokens": 50,
+      "cachedTokens": 25,
+      "cacheWriteTokens": 0,
+      "cost": {
+        "amount": "0.00026200",
+        "currency": "USD"
+      },
+      "costStr": "0.00026200 USD"
+    },
+    {
+      "model": "gemini-2.5-pro",
+      "inputTokens": 4096,
+      "outputTokens": 1024,
+      "cachedTokens": 1000,
+      "cacheWriteTokens": 0,
+      "cost": {
+        "amount": "0.0144225000",
+        "currency": "USD"
+      },
+      "costStr": "0.0144225000 USD"
+    },
+    {
+      "model": "gemini-2.0-flash",
+      "inputTokens": 500,
+      "outputTokens": 500,
+      "cachedTokens": 0,
+      "cacheWriteTokens": 0,
+      "cost": {
+        "amount": "0.000250000",
+        "currency": "USD"
+      },
+      "costStr": "0.000250000 USD"
+    },
+    {
+      "model": "o3",
+      "inputTokens": 3000,
+      "outputTokens": 900,
+      "cachedTokens": 0,
+      "cacheWriteTokens": 0,
+      "cost": {
+        "amount": "0.01320000",
+        "currency": "USD"
+      },
+      "costStr": "0.01320000 USD"
+    },
+    {
+      "model": "llama3",
+      "inputTokens": 1000,
+      "outputTokens": 1000,
+      "cachedTokens": 0,
+      "cacheWriteTokens": 0,
+      "cost": {
+        "amount": "0.000",
+        "currency": "USD"
+      },
+      "costStr": "0.000 USD"
+    },
+    {
+      "model": "gpt-4-turbo",
+      "inputTokens": 777,
+      "outputTokens": 333,
+      "cachedTokens": 0,
+      "cacheWriteTokens": 50,
+      "cost": {
+        "amount": "0.0183850",
+        "currency": "USD"
+      },
+      "costStr": "0.0183850 USD"
+    }
+  ],
+  "unknownModel": {
+    "model": "totally-unknown-model-xyz",
+    "raises": true
+  }
+}
