@@ -1,0 +1,55 @@
+{
+  "name": "@cendor/contextkit",
+  "version": "0.1.0",
+  "description": "Assemble LLM context to a token budget with priority, pinning, and eviction. The TypeScript port of cendor.contextkit.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@cendor/core": "workspace:^"
+  },
+  "peerDependencies": {
+    "@cendor/squeeze": "workspace:^"
+  },
+  "peerDependenciesMeta": {
+    "@cendor/squeeze": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@cendor/squeeze": "workspace:^",
+    "fast-check": "^3.23.2"
+  },
+  "keywords": [
+    "llm",
+    "context",
+    "prompt",
+    "tokens",
+    "budget",
+    "cendor"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cendorhq/cendor-libs-js.git",
+    "directory": "packages/contextkit"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

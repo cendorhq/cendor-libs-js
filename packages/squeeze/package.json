@@ -1,0 +1,52 @@
+{
+  "name": "@cendor/squeeze",
+  "version": "0.1.0",
+  "description": "Content-aware, deterministic, reversible context compression. The TypeScript port of cendor.squeeze.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "default": "./dist/store.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@cendor/core": "workspace:^"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.11.1"
+  },
+  "keywords": [
+    "llm",
+    "context",
+    "compression",
+    "tokens",
+    "cendor"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cendorhq/cendor-libs-js.git",
+    "directory": "packages/squeeze"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "devDependencies": {
+    "fast-check": "^3.23.2"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "@cendor/tokenguard",
+  "version": "0.1.0",
+  "description": "Pre-flight cost caps + per-tag spend attribution for LLM calls. The TypeScript port of cendor.tokenguard.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./sinks": {
+      "types": "./dist/sinks.d.ts",
+      "default": "./dist/sinks.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "sideEffects": ["./dist/index.js"],
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "@cendor/core": "workspace:^"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.11.1"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": ">=1"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/api": { "optional": true }
+  },
+  "keywords": ["llm", "budget", "cost", "governance", "cendor"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cendorhq/cendor-libs-js.git",
+    "directory": "packages/tokenguard"
+  },
+  "publishConfig": { "access": "public", "provenance": true }
+}
