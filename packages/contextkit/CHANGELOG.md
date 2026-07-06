@@ -1,5 +1,13 @@
 # @cendor/contextkit
 
+## 1.0.1
+
+### Patch Changes
+
+- Updated dependencies [9b7817a]
+- Updated dependencies [09d44d2]
+  - @cendor/core@0.3.0
+
 ## 1.0.0
 
 > Note: the jump to `1.0.0` was an automatic **major** bump emitted by changesets when the

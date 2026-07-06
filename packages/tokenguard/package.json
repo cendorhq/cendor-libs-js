@@ -1,6 +1,6 @@
 {
   "name": "@cendor/tokenguard",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Pre-flight cost caps + per-tag spend attribution for LLM calls. The TypeScript port of cendor.tokenguard.",
   "type": "module",
   "license": "Apache-2.0",

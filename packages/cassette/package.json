@@ -1,6 +1,6 @@
 {
   "name": "@cendor/cassette",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Record an agent run once, replay it forever — offline, deterministic, free. The TypeScript port of cendor.cassette.",
   "type": "module",
   "license": "Apache-2.0",

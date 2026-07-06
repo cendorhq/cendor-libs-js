@@ -1,5 +1,19 @@
 # @cendor/libs
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [0092224]
+- Updated dependencies [9b7817a]
+- Updated dependencies [09d44d2]
+  - @cendor/acttrace@0.3.0
+  - @cendor/core@0.3.0
+  - @cendor/cassette@0.2.1
+  - @cendor/contextkit@1.0.1
+  - @cendor/squeeze@0.2.1
+  - @cendor/tokenguard@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

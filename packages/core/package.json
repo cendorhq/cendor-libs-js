@@ -1,6 +1,6 @@
 {
   "name": "@cendor/core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The shared foundation of the Cendor stack: types, event bus, decimal-safe Money, price table, token counting, and instrument(). The TypeScript port of cendor.core.",
   "type": "module",
   "license": "Apache-2.0",

@@ -1,6 +1,6 @@
 {
   "name": "@cendor/contextkit",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Assemble LLM context to a token budget with priority, pinning, and eviction. The TypeScript port of cendor.contextkit.",
   "type": "module",
   "license": "Apache-2.0",
