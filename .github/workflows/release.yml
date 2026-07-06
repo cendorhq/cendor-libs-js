@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency: release-${{ github.ref }}
+
+permissions:
+  contents: write # create the version PR + git tags
+  pull-requests: write # open/update the "Version Packages" PR
+  id-token: write # npm provenance + OIDC trusted publishing (tokenless)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      # Changesets: when changesets are present, opens/updates a "Version Packages" PR that bumps
+      # versions + writes CHANGELOGs. When that PR merges (versions already bumped, no changesets left),
+      # `publish` runs and publishes the changed @cendor/* packages to npm.
+      #
+      # Publishing uses npm OIDC **trusted publishing** (no NPM_TOKEN): configure each package's trusted
+      # publisher on npmjs.com to this repo + workflow first (see PUBLISHING.md). `provenance:true` in
+      # each package's publishConfig attaches a provenance attestation. Changesets tags each published
+      # package `@cendor/<x>@<version>`, so the git tag ≍ the manifest version by construction.
+      - name: Create Release PR or publish
+        uses: changesets/action@v1
+        with:
+          version: pnpm version-packages
+          publish: pnpm release
+          commit: "chore: version packages"
+          title: "chore: version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

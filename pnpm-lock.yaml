@@ -67,6 +67,27 @@ importers:
         specifier: ^1.0.15
         version: 1.0.21
 
+  packages/libs:
+    dependencies:
+      '@cendor/acttrace':
+        specifier: workspace:^
+        version: link:../acttrace
+      '@cendor/cassette':
+        specifier: workspace:^
+        version: link:../cassette
+      '@cendor/contextkit':
+        specifier: workspace:^
+        version: link:../contextkit
+      '@cendor/core':
+        specifier: workspace:^
+        version: link:../core
+      '@cendor/squeeze':
+        specifier: workspace:^
+        version: link:../squeeze
+      '@cendor/tokenguard':
+        specifier: workspace:^
+        version: link:../tokenguard
+
   packages/squeeze:
     dependencies:
       '@cendor/core':

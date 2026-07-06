@@ -1,0 +1,33 @@
+{
+  "name": "@cendor/libs",
+  "version": "0.1.0",
+  "description": "Umbrella meta-package — installs all six Cendor libraries and re-exports them as namespaces. The TypeScript port of the cendor-libs meta-package.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "sideEffects": false,
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "@cendor/core": "workspace:^",
+    "@cendor/tokenguard": "workspace:^",
+    "@cendor/contextkit": "workspace:^",
+    "@cendor/squeeze": "workspace:^",
+    "@cendor/cassette": "workspace:^",
+    "@cendor/acttrace": "workspace:^"
+  },
+  "keywords": ["llm", "cendor", "meta", "umbrella"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cendorhq/cendor-libs-js.git",
+    "directory": "packages/libs"
+  },
+  "publishConfig": { "access": "public", "provenance": true }
+}

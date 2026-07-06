@@ -6,6 +6,7 @@
     { "path": "packages/tokenguard" },
     { "path": "packages/contextkit" },
     { "path": "packages/cassette" },
-    { "path": "packages/acttrace" }
+    { "path": "packages/acttrace" },
+    { "path": "packages/libs" }
   ]
 }
