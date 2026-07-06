@@ -3,8 +3,9 @@
 How the `@cendor/*` npm packages map to the reference Python `cendor.*` libraries. Both are one
 implementation of the shared [format specs](https://github.com/cendorhq/cendor-libs/tree/main/docs/specs);
 cross-language artifacts (cassettes, audit chains, prices, bus events) are byte-for-byte interoperable,
-checked by committed conformance vectors (replayed in the cendor-libs-js CI today; Python-side replay
-of JS-written artifacts lands with JS-6).
+checked by committed conformance vectors in both CIs — each language verifies artifacts written by the
+other (the cendor-libs-js CI replays Python-written fixtures; the cendor-libs CI verifies a JS-written
+audit chain).
 
 Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** deliberately not ported.
 
