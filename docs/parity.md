@@ -19,9 +19,9 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 | Price table + `estimate()` | ✅ | ✅ | decimal-exact; same bundled snapshot; `refresh()` async in TS |
 | `prices.register()` | ✅* | ✅ | *Py registers via core's loaded table; TS adds a public seam |
 | Token counting | ✅ | ✅ | `tiktoken` ↔ `js-tiktoken` — exact counts match |
-| `instrument()` providers | ✅ 6 (OpenAI, Anthropic, HuggingFace, google-genai, Bedrock, Ollama) | 🚧 OpenAI + Anthropic on npm; HuggingFace / google-genai / Bedrock / Ollama detection ship with the next `@cendor/core` release | Bedrock JS matches a boto-shaped `converse()`; aws-sdk-v3 rides the SDK provider |
+| `instrument()` providers | ✅ 6 (OpenAI, Anthropic, HuggingFace, google-genai, Bedrock, Ollama) | ✅ 6 (OpenAI, Anthropic, HuggingFace, google-genai, Bedrock, Ollama) | Bedrock JS auto-detects a boto-shaped `converse()`; aws-sdk-v3 rides the SDK provider |
 | `instrument()` streaming / interceptors / `Reroute` | ✅ | ✅ | |
-| core `otel` spans / `ingest()` | ✅ | 🚧 | implemented; ships on npm with the next `@cendor/core` release (`@opentelemetry/api` optional peer) |
+| core `otel` spans / `ingest()` | ✅ | ✅ | `span()` + `ingest()`; `@opentelemetry/api` optional peer — span is a no-op without it |
 | LangChain `CendorCallbackHandler` | ✅ | **Py-only** | LangChain.js handler not ported (lands by demand) |
 | `trace()` correlation | ✅ contextvars | ✅ | AsyncLocalStorage-injectable; ambient fallback |
 | **tokenguard** budgets/track/report/sinks | ✅ | ✅ | `AsyncLocalStorage` scoping; SQLite/Queue/OTel sinks |
