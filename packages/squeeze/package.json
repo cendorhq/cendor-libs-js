@@ -1,6 +1,6 @@
 {
   "name": "@cendor/squeeze",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Content-aware, deterministic, reversible context compression. The TypeScript port of cendor.squeeze.",
   "type": "module",
   "license": "Apache-2.0",
@@ -43,8 +43,7 @@
     "directory": "packages/squeeze"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "devDependencies": {
     "fast-check": "^3.23.2"

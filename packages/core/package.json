@@ -1,6 +1,6 @@
 {
   "name": "@cendor/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The shared foundation of the Cendor stack: types, event bus, decimal-safe Money, price table, token counting, and instrument(). The TypeScript port of cendor.core.",
   "type": "module",
   "license": "Apache-2.0",
@@ -12,18 +12,33 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "sideEffects": false,
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "decimal.js": "^10.4.3",
     "js-tiktoken": "^1.0.15"
   },
-  "keywords": ["llm", "openai", "anthropic", "tokens", "cost", "instrument", "cendor"],
+  "keywords": [
+    "llm",
+    "openai",
+    "anthropic",
+    "tokens",
+    "cost",
+    "instrument",
+    "cendor"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cendorhq/cendor-libs-js.git",
     "directory": "packages/core"
   },
-  "publishConfig": { "access": "public", "provenance": true }
+  "publishConfig": {
+    "access": "public"
+  }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@cendor/acttrace",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A tamper-evident, auto-populated audit log for AI decisions. The TypeScript port of cendor.acttrace (regex/pattern detectors only).",
   "type": "module",
   "license": "Apache-2.0",
@@ -16,17 +16,31 @@
       "default": "./dist/storage.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "sideEffects": false,
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "@cendor/core": "workspace:^"
   },
-  "keywords": ["llm", "audit", "governance", "eu-ai-act", "tamper-evident", "cendor"],
+  "keywords": [
+    "llm",
+    "audit",
+    "governance",
+    "eu-ai-act",
+    "tamper-evident",
+    "cendor"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cendorhq/cendor-libs-js.git",
     "directory": "packages/acttrace"
   },
-  "publishConfig": { "access": "public", "provenance": true }
+  "publishConfig": {
+    "access": "public"
+  }
 }
