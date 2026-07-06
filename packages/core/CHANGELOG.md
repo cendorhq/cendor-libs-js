@@ -1,5 +1,11 @@
 # @cendor/core
 
+## 0.3.2
+
+### Patch Changes
+
+- 0045081: Plain-language README openers (the tagline npm renders at the top of each package page) — matches the rewritten one-line descriptions. Docs only.
+
 ## 0.3.1
 
 ### Patch Changes

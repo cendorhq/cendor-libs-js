@@ -1,5 +1,13 @@
 # @cendor/contextkit
 
+## 1.0.3
+
+### Patch Changes
+
+- 0045081: Plain-language README openers (the tagline npm renders at the top of each package page) — matches the rewritten one-line descriptions. Docs only.
+- Updated dependencies [0045081]
+  - @cendor/core@0.3.2
+
 ## 1.0.2
 
 ### Patch Changes
