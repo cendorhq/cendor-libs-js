@@ -19,9 +19,9 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 | Price table + `estimate()` | ✅ | ✅ | decimal-exact; same bundled snapshot; `refresh()` async in TS |
 | `prices.register()` | ✅* | ✅ | *Py registers via core's loaded table; TS adds a public seam |
 | Token counting | ✅ | ✅ | `tiktoken` ↔ `js-tiktoken` — exact counts match |
-| `instrument()` providers | ✅ 6 (OpenAI, Anthropic, HuggingFace, google-genai, Bedrock, Ollama) | 🚧 OpenAI (Chat+Responses) + Anthropic | HuggingFace / google-genai / Bedrock / Ollama detection are **Py-only** today; same seam |
+| `instrument()` providers | ✅ 6 (OpenAI, Anthropic, HuggingFace, google-genai, Bedrock, Ollama) | 🚧 OpenAI + Anthropic on npm; HuggingFace / google-genai / Bedrock / Ollama detection ship with the next `@cendor/core` release | Bedrock JS matches a boto-shaped `converse()`; aws-sdk-v3 rides the SDK provider |
 | `instrument()` streaming / interceptors / `Reroute` | ✅ | ✅ | |
-| core `otel` spans / `ingest()` | ✅ | **Py-only** | OTel *export* ships via tokenguard's `OTelSink` in both; core's `otel` module is Py-only for now |
+| core `otel` spans / `ingest()` | ✅ | 🚧 | implemented; ships on npm with the next `@cendor/core` release (`@opentelemetry/api` optional peer) |
 | LangChain `CendorCallbackHandler` | ✅ | **Py-only** | LangChain.js handler not ported (lands by demand) |
 | `trace()` correlation | ✅ contextvars | ✅ | AsyncLocalStorage-injectable; ambient fallback |
 | **tokenguard** budgets/track/report/sinks | ✅ | ✅ | `AsyncLocalStorage` scoping; SQLite/Queue/OTel sinks |
@@ -46,8 +46,10 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 
 ## SDK (`cendor-sdk` ↔ `cendor-sdk-js`)
 
-See the [SDK parity page](https://github.com/cendorhq/cendor-sdk-js) — Agent loop, OpenAI + Anthropic
-providers first (others scaffolded behind the same `Provider` seam), zod tool schemas, sessions
-(better-sqlite3 + memory adapters), handoff/supervisor/sequential/parallel, structured outputs,
-streaming (**buffered today**; incremental + multi-agent streaming land in JS-6), and the v1.1
-surface (progress hooks, prompt caching, live OTel spans).
+See the [SDK parity page](https://github.com/cendorhq/cendor-sdk-js) — Agent loop, all ten provider
+paths (OpenAI, Anthropic, HuggingFace, Azure AI Foundry chat + responses, Foundry Local, Ollama, Gemini,
+Bedrock), zod tool schemas, sessions (better-sqlite3 + memory adapters), handoff/supervisor/sequential/
+parallel, structured outputs, incremental single- + multi-agent streaming, the v1.1 surface (progress
+hooks, prompt caching, live OTel spans), plus MCP tool loading, checkpoint/resume, A2A server/client,
+and the Foundry Bot-Framework adapter. Usage capture for HuggingFace/Ollama/Gemini/Bedrock rides
+`@cendor/core`'s provider detection (released together).
