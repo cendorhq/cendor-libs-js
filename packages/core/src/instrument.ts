@@ -75,6 +75,11 @@ type Target = [owner: Record<string, unknown>, attr: string, provider: string];
 function findTargets(client: unknown): Target[] {
   if (client == null || typeof client !== 'object') return [];
   const c = client as Record<string, unknown>;
+  // Hugging Face InferenceClient exposes chatCompletion(...) on the client itself (it also has an
+  // OpenAI-compatible chat.completions.create). Bind chatCompletion FIRST — before the OpenAI check
+  // matches that compat namespace — so the LLMCall is attributed to "huggingface". The response is
+  // OpenAI-shaped, so usage/parse/stream reuse the OpenAI path. (JS SDK method is camelCase.)
+  if (typeof c.chatCompletion === 'function') return [[c, 'chatCompletion', 'huggingface']];
   const targets: Target[] = [];
   const chat = c.chat as Record<string, unknown> | undefined;
   const completions = chat?.completions as Record<string, unknown> | undefined;
@@ -90,6 +95,32 @@ function findTargets(client: unknown): Target[] {
   if (messages && typeof messages.create === 'function') {
     return [[messages, 'create', 'anthropic']];
   }
+  // AWS Bedrock Converse. LIMITATION: aws-sdk v3 uses `client.send(new ConverseCommand(...))` — there
+  // is NO duck-typable `client.converse(...)`, and `send` is shared by every AWS command so it can't
+  // be cleanly duck-typed. This predicate matches boto-shaped / wrapper clients that DO expose
+  // `converse()`; first-class aws-sdk-v3 Bedrock support rides the SDK provider (Phase C), which wraps
+  // the client directly. The usage/request/stream bedrock branches below are implemented regardless so
+  // Phase C reuses them.
+  if (typeof c.converse === 'function') return [[c, 'converse', 'bedrock']];
+  // Legacy @google/generative-ai: `model.generateContent(...)` with the model id bound to the object
+  // (read as modelDefault in instrument()).
+  if (typeof c.generateContent === 'function') return [[c, 'generateContent', 'google']];
+  // @google/genai SDK: sync `client.models.generateContent` + (parity) async
+  // `client.aio?.models?.generateContent`. In the JS SDK there is only one async surface (no `aio`),
+  // but the `aio` probe is harmless and keeps parity with the Python detection.
+  const google: Target[] = [];
+  const models = c.models as Record<string, unknown> | undefined;
+  if (models && typeof models.generateContent === 'function') {
+    google.push([models, 'generateContent', 'google']);
+  }
+  const aio = c.aio as Record<string, unknown> | undefined;
+  const aioModels = aio?.models as Record<string, unknown> | undefined;
+  if (aioModels && typeof aioModels.generateContent === 'function') {
+    google.push([aioModels, 'generateContent', 'google']);
+  }
+  if (google.length > 0) return google;
+  // Ollama: `client.chat(...)` is itself callable (vs OpenAI's `chat` namespace). Checked LAST.
+  if (typeof c.chat === 'function') return [[c, 'chat', 'ollama']];
   return [];
 }
 
@@ -98,8 +129,10 @@ function publicProvider(provider: string): string {
   return PUBLIC_PROVIDER[provider] ?? provider;
 }
 
-/** Per-provider kwarg carrying request messages (so `Reroute({ messages })` rewrites the right field). */
-const MESSAGES_KWARG: Record<string, string> = { openai_responses: 'input' };
+/** Per-provider kwarg carrying request messages (so `Reroute({ messages })` rewrites the right field).
+ * Chat Completions / Anthropic / Bedrock / Ollama use `messages`; the Responses API uses `input`;
+ * Gemini uses `contents`. */
+const MESSAGES_KWARG: Record<string, string> = { openai_responses: 'input', google: 'contents' };
 
 /**
  * Wrap a provider client so each call emits an `LLMCall` on the bus. Detection is structural. Unknown
@@ -109,22 +142,42 @@ export function instrument<T>(client: T): T {
   for (const [owner, attr, provider] of findTargets(client)) {
     const fn = owner[attr] as ((...args: unknown[]) => unknown) & { [WRAPPED]?: boolean };
     if (fn[WRAPPED]) continue;
-    owner[attr] = wrap(fn.bind(owner) as (...args: unknown[]) => Promise<unknown>, provider);
+    let modelDefault = '';
+    if (provider === 'google') {
+      // The legacy @google/generative-ai GenerativeModel binds the model id to the object (`.model`,
+      // e.g. "models/gemini-1.5-pro"), not the call args — read it so the LLMCall carries a real,
+      // priceable model id (strip the "models/" prefix). The @google/genai Client has no such field;
+      // its model rides the `model` arg instead. (`modelName`/`_modelName` covered for parity.)
+      const c = client as Record<string, unknown>;
+      const name = (get(c, 'model') ?? get(c, 'modelName') ?? get(c, '_modelName') ?? '') as string;
+      modelDefault = String(name).replace(/^models\//, '');
+    }
+    owner[attr] = wrap(
+      fn.bind(owner) as (...args: unknown[]) => Promise<unknown>,
+      provider,
+      modelDefault,
+    );
   }
   return client;
 }
 
 // --------------------------------------------------------------------------- model clients
 
-function wrap(orig: (...args: unknown[]) => Promise<unknown>, provider: string) {
+function wrap(orig: (...args: unknown[]) => Promise<unknown>, provider: string, modelDefault = '') {
   const wrapper = async (...args: unknown[]): Promise<unknown> => {
-    const kwargs: Record<string, unknown> = {
-      ...((args[0] as Record<string, unknown> | undefined) ?? {}),
-    };
+    // The JS SDKs mostly take a single options object (`create({...})`); the legacy Gemini surface
+    // also accepts a positional string/array (`generateContent("hi")`). Only spread args[0] into
+    // `kwargs` when it is a plain options object — otherwise keep the original positional args intact.
+    const first = args[0];
+    const hasOptions = first != null && typeof first === 'object' && !Array.isArray(first);
+    const kwargs: Record<string, unknown> = hasOptions
+      ? { ...(first as Record<string, unknown>) }
+      : {};
     const rest = args.slice(1);
-    const { call, start } = pre(provider, kwargs);
+    const { call, start } = pre(provider, kwargs, args, modelDefault);
     ensureStreamUsageOptions(provider, kwargs);
     const streaming = Boolean(kwargs.stream);
+    const runReal = (): Promise<unknown> => (hasOptions ? orig(kwargs, ...rest) : orig(...args));
     const directive = intercept(call);
     if (directive instanceof Reroute) {
       applyReroute(call, kwargs, directive, provider);
@@ -139,7 +192,7 @@ function wrap(orig: (...args: unknown[]) => Promise<unknown>, provider: string) 
       post(call, directive, provider, start);
       return directive;
     }
-    const response = await orig(kwargs, ...rest);
+    const response = await runReal();
     if (streaming) return proxyStream(call, response, provider, start);
     post(call, response, provider, start);
     return response;
@@ -170,8 +223,13 @@ function applyReroute(
   call.metadata.rerouted = true;
 }
 
-function pre(provider: string, kwargs: Record<string, unknown>): { call: LLMCall; start: number } {
-  const { model, messages } = extractRequest(provider, kwargs);
+function pre(
+  provider: string,
+  kwargs: Record<string, unknown>,
+  args: unknown[],
+  modelDefault: string,
+): { call: LLMCall; start: number } {
+  const { model, messages } = extractRequest(provider, kwargs, args, modelDefault);
   const call = new LLMCall({
     id: uuidHex(),
     provider: publicProvider(provider),
@@ -187,6 +245,8 @@ function pre(provider: string, kwargs: Record<string, unknown>): { call: LLMCall
 function extractRequest(
   provider: string,
   kwargs: Record<string, unknown>,
+  args: unknown[],
+  modelDefault: string,
 ): { model: string; messages: Message[] } {
   if (provider === 'openai_responses') {
     const inp = kwargs.input ?? kwargs.messages;
@@ -196,7 +256,23 @@ function extractRequest(
     else messages = [];
     return { model: (kwargs.model as string) ?? '', messages };
   }
-  // openai / anthropic both take model= + messages=
+  if (provider === 'bedrock') {
+    // Converse: modelId= (not model=) carries the model; messages= carries the turns.
+    const messages = Array.isArray(kwargs.messages) ? (kwargs.messages as Message[]) : [];
+    return { model: (kwargs.modelId as string) ?? '', messages };
+  }
+  if (provider === 'google') {
+    // Gemini messages ride `contents` (or the first positional arg on the legacy surface); the model
+    // id rides `model` on the new client, else the object-bound modelDefault on the legacy one.
+    let contents: unknown = kwargs.contents;
+    if (contents == null && args.length > 0) contents = args[0];
+    let messages: Message[];
+    if (Array.isArray(contents)) messages = contents as Message[];
+    else if (contents) messages = [{ role: 'user', content: String(contents) }];
+    else messages = [];
+    return { model: (kwargs.model as string) || modelDefault, messages };
+  }
+  // openai / anthropic / ollama / huggingface all take model= + messages=
   const messages = Array.isArray(kwargs.messages) ? (kwargs.messages as Message[]) : [];
   return { model: (kwargs.model as string) ?? '', messages };
 }
@@ -411,6 +487,19 @@ function streamUsage(chunks: unknown[], provider: string): Usage | null {
       cacheWrite,
     });
   }
+  if (provider === 'bedrock') {
+    // Bedrock streams usage on a `metadata` event (camelCase token keys).
+    for (const ch of chunks) {
+      const u = get(get(ch, 'metadata'), 'usage');
+      if (u !== null) {
+        return new Usage({
+          inputTokens: toInt((get(u, 'inputTokens', 0) as number) || 0),
+          outputTokens: toInt((get(u, 'outputTokens', 0) as number) || 0),
+        });
+      }
+    }
+    return null;
+  }
   if (provider === 'openai_responses') {
     for (const ch of chunks) {
       const resp = get(ch, 'response');
@@ -419,6 +508,7 @@ function streamUsage(chunks: unknown[], provider: string): Usage | null {
     }
     return null;
   }
+  // openai / huggingface / ollama / google: usage rides one (final) chunk, full-response shaped.
   for (const ch of chunks) {
     const u = extractUsage(ch, provider);
     if (u !== null) return u;
@@ -442,7 +532,8 @@ function streamText(chunk: unknown, provider: string): string {
         return String(get(chunk, 'delta', '') ?? '');
       return '';
     }
-    if (provider === 'openai') {
+    if (provider === 'openai' || provider === 'huggingface') {
+      // Both stream Chat Completions-shaped chunks (HF's response is OpenAI-shaped).
       const choices = (get(chunk, 'choices') as unknown[]) ?? [];
       return choices.map((c) => String(get(get(c, 'delta'), 'content', '') ?? '')).join('');
     }
@@ -450,6 +541,15 @@ function streamText(chunk: unknown, provider: string): string {
       if (get(chunk, 'type') === 'content_block_delta')
         return String(get(get(chunk, 'delta'), 'text', '') ?? '');
       return '';
+    }
+    if (provider === 'ollama') {
+      return String(get(get(chunk, 'message'), 'content', '') ?? '');
+    }
+    if (provider === 'google') {
+      return String(get(chunk, 'text', '') ?? '');
+    }
+    if (provider === 'bedrock') {
+      return String(get(get(get(chunk, 'contentBlockDelta'), 'delta'), 'text', '') ?? '');
     }
   } catch {
     return '';
@@ -461,27 +561,48 @@ function extractUsage(response: unknown, provider: string): Usage | null {
   let cached = 0;
   let cacheWrite = 0;
   let reasoning = 0;
-  const u = get(response, 'usage');
-  if (u === null) return null;
   let inp: unknown;
   let out: unknown;
-  if (provider === 'openai' || provider === 'openai_responses') {
-    inp = get(u, 'prompt_tokens');
-    if (inp == null) inp = get(u, 'input_tokens');
-    out = get(u, 'completion_tokens');
-    if (out == null) out = get(u, 'output_tokens', 0);
-    out = out || 0;
-    const details = get(u, 'prompt_tokens_details') ?? get(u, 'input_tokens_details');
-    cached = details !== null ? (get(details, 'cached_tokens', 0) as number) || 0 : 0;
-    const cdetails = get(u, 'completion_tokens_details') ?? get(u, 'output_tokens_details');
-    reasoning = cdetails !== null ? (get(cdetails, 'reasoning_tokens', 0) as number) || 0 : 0;
+  if (provider === 'google') {
+    // Usage lives under `usage_metadata`. Gemini reports thinking-model reasoning under
+    // `thoughts_token_count`, *separate* from `candidates_token_count`; both bill as output, so fold
+    // thoughts into the output total (else reasoning models under-count) and surface as reasoning.
+    const meta = get(response, 'usage_metadata');
+    inp = get(meta, 'prompt_token_count');
+    reasoning = (get(meta, 'thoughts_token_count', 0) as number) || 0;
+    out = ((get(meta, 'candidates_token_count', 0) as number) || 0) + reasoning;
+  } else if (provider === 'ollama') {
+    // Token counts are top-level on the response.
+    inp = get(response, 'prompt_eval_count');
+    out = (get(response, 'eval_count', 0) as number) || 0;
   } else {
-    // anthropic — thinking tokens are folded into output_tokens with no separate count
-    const baseIn = get(u, 'input_tokens');
-    out = (get(u, 'output_tokens', 0) as number) || 0;
-    cached = (get(u, 'cache_read_input_tokens', 0) as number) || 0;
-    cacheWrite = (get(u, 'cache_creation_input_tokens', 0) as number) || 0;
-    inp = baseIn == null ? null : toInt(baseIn) + cached;
+    const u = get(response, 'usage');
+    if (u === null) return null;
+    if (provider === 'openai' || provider === 'openai_responses' || provider === 'huggingface') {
+      // Dual-shape: Chat Completions uses prompt_tokens/completion_tokens (+ details); the Responses
+      // API uses input_tokens/output_tokens (+ *_tokens_details). HF's chatCompletion returns the
+      // Chat Completions shape. Read whichever the response carries so one branch covers all three.
+      inp = get(u, 'prompt_tokens');
+      if (inp == null) inp = get(u, 'input_tokens');
+      out = get(u, 'completion_tokens');
+      if (out == null) out = get(u, 'output_tokens', 0);
+      out = out || 0;
+      const details = get(u, 'prompt_tokens_details') ?? get(u, 'input_tokens_details');
+      cached = details !== null ? (get(details, 'cached_tokens', 0) as number) || 0 : 0;
+      const cdetails = get(u, 'completion_tokens_details') ?? get(u, 'output_tokens_details');
+      reasoning = cdetails !== null ? (get(cdetails, 'reasoning_tokens', 0) as number) || 0 : 0;
+    } else if (provider === 'bedrock') {
+      // Converse usage uses camelCase token keys.
+      inp = get(u, 'inputTokens');
+      out = (get(u, 'outputTokens', 0) as number) || 0;
+    } else {
+      // anthropic — thinking tokens are folded into output_tokens with no separate count
+      const baseIn = get(u, 'input_tokens');
+      out = (get(u, 'output_tokens', 0) as number) || 0;
+      cached = (get(u, 'cache_read_input_tokens', 0) as number) || 0;
+      cacheWrite = (get(u, 'cache_creation_input_tokens', 0) as number) || 0;
+      inp = baseIn == null ? null : toInt(baseIn) + cached;
+    }
   }
   if (inp == null) return null;
   return new Usage({

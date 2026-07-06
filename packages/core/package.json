@@ -24,6 +24,14 @@
     "decimal.js": "^10.4.3",
     "js-tiktoken": "^1.0.15"
   },
+  "peerDependencies": {
+    "@opentelemetry/api": ">=1"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/api": {
+      "optional": true
+    }
+  },
   "keywords": [
     "llm",
     "openai",

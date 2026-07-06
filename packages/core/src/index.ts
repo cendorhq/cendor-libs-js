@@ -12,6 +12,7 @@ export * as bus from './bus.js';
 export * as tokens from './tokens.js';
 export * as prices from './prices.js';
 export * as protocols from './protocols.js';
+export * as otel from './otel.js';
 
 export {
   MISS,
