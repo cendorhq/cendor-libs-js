@@ -1,5 +1,13 @@
 # @cendor/squeeze
 
+## 0.2.2
+
+### Patch Changes
+
+- 0536aae: Plain-language npm package descriptions (metadata only — no code change).
+- Updated dependencies [0536aae]
+  - @cendor/core@0.3.1
+
 ## 0.2.1
 
 ### Patch Changes

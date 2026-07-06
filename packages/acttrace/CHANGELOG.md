@@ -1,5 +1,13 @@
 # @cendor/acttrace
 
+## 0.3.1
+
+### Patch Changes
+
+- 0536aae: Plain-language npm package descriptions (metadata only — no code change).
+- Updated dependencies [0536aae]
+  - @cendor/core@0.3.1
+
 ## 0.3.0
 
 ### Minor Changes

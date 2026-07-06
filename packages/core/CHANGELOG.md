@@ -1,5 +1,11 @@
 # @cendor/core
 
+## 0.3.1
+
+### Patch Changes
+
+- 0536aae: Plain-language npm package descriptions (metadata only — no code change).
+
 ## 0.3.0
 
 ### Minor Changes
