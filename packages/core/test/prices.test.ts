@@ -60,6 +60,16 @@ describe('prices — cross-language conformance (prices/1)', () => {
     expect(prices.sources()).toEqual(['azure', 'litellm', 'openrouter']);
   });
 
+  it('register() adds a model so estimate() and models() see it', () => {
+    expect(() => prices.estimate('my-deploy', 1000)).toThrow(UnknownModelError);
+    prices.register('my-deploy', { input: '0.0000025', output: '0.00001' });
+    expect(prices.models()).toContain('my-deploy');
+    const c = prices.estimate('my-deploy', 1000, { outputTokens: 500 });
+    expect(c.amount.equals(new Dec('0.0075'))).toBe(true);
+    prices._reset();
+    expect(() => prices.estimate('my-deploy', 1000)).toThrow(UnknownModelError); // dropped on reset
+  });
+
   it('cache_write defaults to 1.25x input when unpriced', () => {
     // gpt-4o has no cache_write rate: input 0.0000025 -> write 0.000003125.
     const c = prices.estimate('gpt-4o', 0, { cacheWriteTokens: 1_000_000 });

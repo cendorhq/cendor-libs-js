@@ -1,3 +1,4 @@
+import { AuditLog } from '../packages/acttrace/dist/index.js';
 /**
  * Cross-language round-trip check (the JS-3 exit criterion, reverse direction):
  * write a signed audit chain with the JS @cendor/acttrace, so the Python `cendor.acttrace.verify()`
@@ -10,8 +11,7 @@
  */
 // Import built dist directly: acttrace's own linked node_modules resolves its internal '@cendor/core'
 // to the SAME packages/core/dist module instance, so the bus is shared.
-import { bus, LLMCall, Money, ToolCall, Usage } from '../packages/core/dist/index.js';
-import { AuditLog } from '../packages/acttrace/dist/index.js';
+import { LLMCall, Money, ToolCall, Usage, bus } from '../packages/core/dist/index.js';
 
 const exportPath = process.argv[2];
 if (!exportPath) throw new Error('usage: node scripts/roundtrip-acttrace.mjs <out-export.jsonl>');
@@ -33,7 +33,14 @@ await log.decision(
     call.cost = new Money('0.00042');
     call.latencyMs = 12.5;
     bus.emit(call);
-    bus.emit(new ToolCall({ id: 't', name: 'search', arguments: { args: ['refund'], kwargs: {} }, result: { hits: 2 } }));
+    bus.emit(
+      new ToolCall({
+        id: 't',
+        name: 'search',
+        arguments: { args: ['refund'], kwargs: {} },
+        result: { hits: 2 },
+      }),
+    );
     d.humanOversight('alice', 'approved', 'looks fine');
   },
   { input: { question: 'refund?' }, actor: 'agent' },

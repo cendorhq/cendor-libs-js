@@ -83,6 +83,34 @@ export function estimate(model: string, inputTokens: number, opts: EstimateOptio
   return new Money(amount);
 }
 
+export interface RegisterRates {
+  input: DecimalValue;
+  output?: DecimalValue;
+  cached?: DecimalValue;
+  cache_write?: DecimalValue;
+}
+
+/**
+ * Register (or overwrite) a model's **per-token** rates in the active price table, so a model absent
+ * from the bundled snapshot (a custom/deployment/Hub id) is costed and USD budgets bind on it.
+ * Rates are exact `Decimal`. The higher-level `@cendor/sdk` `registerModelPrice` handles per-1M/1K
+ * unit conversion before calling this. Dropped by {@link _reset}.
+ */
+export function register(model: string, rates: RegisterRates): void {
+  const t = ensureLoaded();
+  if (!t.models) t.models = {};
+  const r: Rates = { input: rates.input instanceof Dec ? rates.input : new Dec(rates.input) };
+  if (rates.output !== undefined)
+    r.output = rates.output instanceof Dec ? rates.output : new Dec(rates.output);
+  if (rates.cached !== undefined)
+    r.cached = rates.cached instanceof Dec ? rates.cached : new Dec(rates.cached);
+  if (rates.cache_write !== undefined) {
+    r.cache_write =
+      rates.cache_write instanceof Dec ? rates.cache_write : new Dec(rates.cache_write);
+  }
+  t.models[model] = r;
+}
+
 /** Sorted list of model ids known to the current price table. */
 export function models(): string[] {
   return Object.keys(ensureLoaded().models ?? {}).sort();
