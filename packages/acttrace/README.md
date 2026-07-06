@@ -13,6 +13,11 @@ entry after it — and `verify()` re-walks the chain offline.
 canonical bytes and HMAC inputs are identical across languages (snake_case wire keys, int/float
 preserved, `prev_hash` text-prepended, `GENESIS` = 64 zeros).
 
+> **Evidence, not a guarantee.** acttrace produces tamper-evident *evidence* to support a compliance
+> case — it is **not** a compliance guarantee and does not make a system "EU AI Act compliant" (or
+> compliant with any framework). The control-ID annotations from `log.export(path, framework)` map
+> entries to a framework's articles; the assessment itself is always yours.
+
 ## Killer example
 
 ```ts
