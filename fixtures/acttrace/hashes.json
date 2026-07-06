@@ -1,0 +1,54 @@
+{
+  "cases": [
+    {
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "seq": 0,
+      "ts": "2026-07-05T12:00:00+00:00",
+      "type": "audit_open",
+      "payload": {
+        "system": "s",
+        "risk_tier": "limited"
+      },
+      "canonicalBody": "{\"payload\":{\"risk_tier\":\"limited\",\"system\":\"s\"},\"seq\":0,\"ts\":\"2026-07-05T12:00:00+00:00\",\"type\":\"audit_open\"}",
+      "hash": "9b7e886733b448dc9d47173807292346e88ee308deccad81ccbbb32b03d1dda0"
+    },
+    {
+      "prevHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "seq": 1,
+      "ts": "2026-07-05T12:00:01+00:00",
+      "type": "llm_call",
+      "payload": {
+        "decision_id": null,
+        "provider": "openai",
+        "model": "gpt-4o",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "cached_tokens": 0,
+          "reasoning_tokens": 0,
+          "cache_write": 0
+        },
+        "cost": "0.00042 USD",
+        "latency_ms": 12.5,
+        "replayed": false
+      },
+      "canonicalBody": "{\"payload\":{\"cost\":\"0.00042 USD\",\"decision_id\":null,\"latency_ms\":12.5,\"model\":\"gpt-4o\",\"provider\":\"openai\",\"replayed\":false,\"usage\":{\"cache_write\":0,\"cached_tokens\":0,\"input_tokens\":10,\"output_tokens\":5,\"reasoning_tokens\":0}},\"seq\":1,\"ts\":\"2026-07-05T12:00:01+00:00\",\"type\":\"llm_call\"}",
+      "hash": "69109e2951121eda48aaf184051777485b1dc36b605530d4091a620eade432c6"
+    },
+    {
+      "prevHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "seq": 2,
+      "ts": "2026-07-05T12:00:02+00:00",
+      "type": "decision_record",
+      "payload": {
+        "decision_id": "abc",
+        "score": 3,
+        "ratio": 2.0,
+        "flag": true,
+        "note": "café ☕"
+      },
+      "canonicalBody": "{\"payload\":{\"decision_id\":\"abc\",\"flag\":true,\"note\":\"café ☕\",\"ratio\":2.0,\"score\":3},\"seq\":2,\"ts\":\"2026-07-05T12:00:02+00:00\",\"type\":\"decision_record\"}",
+      "hash": "49b913e904f80d8de07b333b007311e10cee60fe511a3d0853659ab8f4fb5482"
+    }
+  ]
+}

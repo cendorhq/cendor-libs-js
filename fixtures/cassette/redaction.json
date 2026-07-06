@@ -1,0 +1,32 @@
+{
+  "cases": [
+    {
+      "input": "my key is sk-ABCDEFGH12345678 ok",
+      "output": "my key is <redacted> ok"
+    },
+    {
+      "input": "email me at alice@example.com please",
+      "output": "email me at <redacted> please"
+    },
+    {
+      "input": "sk-ant-api03-abcdef_ghijklmnop-qrst and sk-proj-ABCDEFGHIJKLMNOP",
+      "output": "<redacted> and <redacted>"
+    },
+    {
+      "input": "AKIAIOSFODNN7EXAMPLE is an aws key",
+      "output": "<redacted> is an aws key"
+    },
+    {
+      "input": "Bearer abc.def-ghi_123 and BEARER shouldnotmatch",
+      "output": "<redacted> and BEARER shouldnotmatch"
+    },
+    {
+      "input": "a well-known best-practice for multi-region fail-over",
+      "output": "a well-known best-practice for multi-region fail-over"
+    },
+    {
+      "input": "token 0123456789abcdef0123456789abcdef1234",
+      "output": "token <redacted>"
+    }
+  ]
+}

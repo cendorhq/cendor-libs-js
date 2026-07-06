@@ -1,0 +1,11 @@
+{
+  "key": "conformance-passphrase",
+  "meta": {
+    "system": "refund-bot",
+    "risk_tier": "high",
+    "head_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "entries": 7
+  },
+  "sig": "9a5c0dd6672dc769ad69fe7864da921b174e9757d05b9981cf93abc2f372d5b2",
+  "canonicalBody": "{\"entries\":7,\"head_hash\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"risk_tier\":\"high\",\"system\":\"refund-bot\"}"
+}

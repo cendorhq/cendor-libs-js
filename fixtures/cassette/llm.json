@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "seq": 0,
+      "kind": "llm",
+      "request_hash": "101daa1c45ee9dac307e6fa94c25684e75e7e5b7b96926c762e36c055a1484ba",
+      "request": {
+        "kind": "llm",
+        "provider": "openai",
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": "I want a refund"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Sure, here is a refund."
+            }
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 10,
+          "completion_tokens": 5
+        }
+      },
+      "response_type": "object"
+    }
+  ]
+}

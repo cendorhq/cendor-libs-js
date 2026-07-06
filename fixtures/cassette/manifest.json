@@ -1,0 +1,55 @@
+{
+  "spec": "cassette/2",
+  "replays": [
+    {
+      "file": "llm.json",
+      "kind": "llm",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": "I want a refund"
+          }
+        ]
+      },
+      "expect": {
+        "path": "choices.0.message.content",
+        "value": "Sure, here is a refund."
+      }
+    },
+    {
+      "file": "tool.json",
+      "kind": "tool",
+      "tool": "search",
+      "args": [
+        "refund"
+      ],
+      "expect": {
+        "value": {
+          "hits": [
+            "doc about refunds",
+            "policy page"
+          ]
+        }
+      }
+    },
+    {
+      "file": "stream.json",
+      "kind": "stream",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": "stream hi"
+          }
+        ],
+        "stream": true
+      },
+      "expect": {
+        "joinedDeltaContent": "Hello"
+      }
+    }
+  ]
+}

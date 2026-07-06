@@ -1,0 +1,18 @@
+{
+  "spec": "acttrace-chain/1",
+  "signed": {
+    "file": "chain-signed.jsonl",
+    "key": "conformance-passphrase",
+    "head": "ec0c3f1393f7e54a3589e4ab52a2543a812b0670bfe675b8a37f8924fec1954a",
+    "entries": 7,
+    "pythonVerify": {
+      "ok": true,
+      "detail": "ok: 7 entries, head ec0c3f1393f7\u2026 (signatures verified; metadata signature verified)"
+    }
+  },
+  "unsigned": {
+    "file": "chain-unsigned.jsonl",
+    "head": "3a986b1dc0d1b37f4f244656d430e8f7c6f7b5cbfae5b4e7f5602db19669204b",
+    "entries": 4
+  }
+}

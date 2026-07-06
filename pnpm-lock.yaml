@@ -33,6 +33,18 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.20.0)
 
+  packages/acttrace:
+    dependencies:
+      '@cendor/core':
+        specifier: workspace:^
+        version: link:../core
+
+  packages/cassette:
+    dependencies:
+      '@cendor/core':
+        specifier: workspace:^
+        version: link:../core
+
   packages/contextkit:
     dependencies:
       '@cendor/core':

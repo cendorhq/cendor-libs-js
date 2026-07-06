@@ -1,0 +1,52 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "seq": 0,
+      "kind": "llm",
+      "request_hash": "ea558f9c7b592ccac45e4daeb6aeef9bf0804477bc42d1e9805f1e30a6b9aebe",
+      "request": {
+        "kind": "llm",
+        "provider": "openai",
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": "stream hi"
+          }
+        ],
+        "stream": true
+      },
+      "response": [
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "Hel"
+              }
+            }
+          ],
+          "usage": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "lo"
+              }
+            }
+          ],
+          "usage": null
+        },
+        {
+          "choices": [],
+          "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 2
+          }
+        }
+      ],
+      "response_type": "object"
+    }
+  ]
+}

@@ -4,6 +4,8 @@
     { "path": "packages/core" },
     { "path": "packages/squeeze" },
     { "path": "packages/tokenguard" },
-    { "path": "packages/contextkit" }
+    { "path": "packages/contextkit" },
+    { "path": "packages/cassette" },
+    { "path": "packages/acttrace" }
   ]
 }

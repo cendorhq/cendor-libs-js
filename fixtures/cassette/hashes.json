@@ -1,0 +1,61 @@
+{
+  "cases": [
+    {
+      "request": {
+        "kind": "llm",
+        "provider": "openai",
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hi"
+          }
+        ],
+        "stream": false
+      },
+      "hash": "d222f427e82aa9f76a8cf7224131cbc9698c7680acfc88f77499c69cbc0ec99f"
+    },
+    {
+      "request": {
+        "kind": "llm",
+        "provider": "anthropic",
+        "model": "claude-opus-4-8",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello"
+          }
+        ],
+        "stream": true
+      },
+      "hash": "58f20816ea3b8221353f18fc2c3c52b903fc4315e3d4bb7fa156664d3d2efa85"
+    },
+    {
+      "request": {
+        "kind": "tool",
+        "name": "search",
+        "arguments": {
+          "args": [
+            "refund"
+          ],
+          "kwargs": {}
+        }
+      },
+      "hash": "dbbe02e32aa11b8f65594c3345e52c545aa13268fac3189a254444f310525fab"
+    },
+    {
+      "request": {
+        "kind": "tool",
+        "name": "calc",
+        "arguments": {
+          "args": [],
+          "kwargs": {
+            "a": 1,
+            "b": 2
+          }
+        }
+      },
+      "hash": "fdb03c8c0180e1eaedaa9abc9996696962e4f81a31c49e83ef46fa9e44b51644"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "seq": 0,
+      "kind": "tool",
+      "request_hash": "dbbe02e32aa11b8f65594c3345e52c545aa13268fac3189a254444f310525fab",
+      "request": {
+        "kind": "tool",
+        "name": "search",
+        "arguments": {
+          "args": [
+            "refund"
+          ],
+          "kwargs": {}
+        }
+      },
+      "response": {
+        "hits": [
+          "doc about refunds",
+          "policy page"
+        ]
+      },
+      "response_type": "mapping"
+    }
+  ]
+}

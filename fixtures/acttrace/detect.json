@@ -1,0 +1,49 @@
+{
+  "cases": [
+    {
+      "input": "contact alice@example.com or use sk-ABCDEFGH12345678",
+      "findings": [
+        {
+          "category": "api_key",
+          "group": "secret",
+          "severity": "critical",
+          "action": "redact",
+          "count": 1
+        },
+        {
+          "category": "email",
+          "group": "pii",
+          "severity": "warning",
+          "action": "redact",
+          "count": 1
+        }
+      ],
+      "redacted": "contact <redacted> or use <redacted>"
+    },
+    {
+      "input": "my card is 4111 1111 1111 1111 and ssn 123-45-6789",
+      "findings": [
+        {
+          "category": "credit_card",
+          "group": "financial",
+          "severity": "critical",
+          "action": "flag",
+          "count": 1
+        },
+        {
+          "category": "us_ssn",
+          "group": "gov_id",
+          "severity": "critical",
+          "action": "flag",
+          "count": 1
+        }
+      ],
+      "redacted": "my card is 4111 1111 1111 1111 and ssn 123-45-6789"
+    },
+    {
+      "input": "no secrets here, just plain text",
+      "findings": [],
+      "redacted": "no secrets here, just plain text"
+    }
+  ]
+}
