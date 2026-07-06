@@ -199,6 +199,158 @@ describe('instrument() — streaming', () => {
   });
 });
 
+// The streamed value is both an async-iterator AND a surface-forwarding handle that finalizes the
+// LLMCall exactly once — on iterate-to-exhaustion OR early close/dispose. Ported (async cases) from
+// PY tests/test_stream_context_manager.py.
+describe('instrument() — streaming proxy surface (WS-B)', () => {
+  function chunk(text: string): unknown {
+    return { choices: [{ delta: { content: text } }], usage: null };
+  }
+  function usageChunk(prompt: number, completion: number): unknown {
+    return { choices: [], usage: { prompt_tokens: prompt, completion_tokens: completion } };
+  }
+
+  // Mimics an OpenAI SDK Stream: async-iterator + close() + a `.response` surface member.
+  class FakeAsyncSDKStream {
+    private readonly _chunks: unknown[];
+    private _i = 0;
+    closed = false;
+    readonly response = 'RAW_RESPONSE';
+    constructor(chunks: unknown[]) {
+      this._chunks = [...chunks];
+    }
+    [Symbol.asyncIterator](): AsyncIterator<unknown> {
+      return {
+        next: async (): Promise<IteratorResult<unknown>> => {
+          if (this._i >= this._chunks.length) return { value: undefined, done: true };
+          return { value: this._chunks[this._i++], done: false };
+        },
+      };
+    }
+    async close(): Promise<void> {
+      this.closed = true;
+    }
+  }
+
+  function asyncClientReturning(stream: unknown) {
+    const client = { chat: { completions: { create: async (_p: unknown) => stream } } };
+    return instrument(client);
+  }
+
+  type StreamHandle = AsyncIterable<unknown> & {
+    response?: unknown;
+    close(): Promise<void>;
+    [Symbol.asyncDispose](): Promise<void>;
+  };
+
+  it('forwards unknown members to the underlying SDK stream (.response)', async () => {
+    const raw = new FakeAsyncSDKStream([usageChunk(1, 1)]);
+    const client = asyncClientReturning(raw);
+    const stream = (await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [],
+      stream: true,
+    })) as StreamHandle;
+
+    expect(stream.response).toBe('RAW_RESPONSE'); // unknown attr forwarded to the SDK stream
+    for await (const _ of stream) {
+      /* drain to finalize */
+    }
+    expect(calls).toHaveLength(1);
+  });
+
+  it('close() finalizes once and closes the underlying stream (idempotent)', async () => {
+    const raw = new FakeAsyncSDKStream([chunk('a'), usageChunk(5, 5)]);
+    const client = asyncClientReturning(raw);
+    const stream = (await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [],
+      stream: true,
+    })) as StreamHandle;
+
+    await stream[Symbol.asyncIterator]().next(); // consume one chunk, then leave early
+    await stream.close();
+    await stream.close(); // second close must not double-emit
+
+    expect(raw.closed).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('iterate-to-exhaustion then dispose does not double-emit', async () => {
+    const raw = new FakeAsyncSDKStream([chunk('a'), usageChunk(2, 2)]);
+    const client = asyncClientReturning(raw);
+    const stream = (await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [],
+      stream: true,
+    })) as StreamHandle;
+
+    for await (const _ of stream) {
+      /* exhaustion finalizes... */
+    }
+    await stream[Symbol.asyncDispose](); // ...dispose would finalize again, but it is a no-op
+    expect(calls).toHaveLength(1);
+    expect(raw.closed).toBe(true);
+  });
+
+  it('captures usage exactly once across iterate + dispose (async-with analogue)', async () => {
+    const chunks = [chunk('Hi'), usageChunk(10, 5)];
+    const raw = new FakeAsyncSDKStream(chunks);
+    const client = asyncClientReturning(raw);
+    const stream = (await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [],
+      stream: true,
+    })) as StreamHandle;
+
+    const got: unknown[] = [];
+    try {
+      for await (const c of stream) got.push(c);
+    } finally {
+      await stream[Symbol.asyncDispose]();
+    }
+
+    expect(got).toEqual(chunks);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.usage?.inputTokens).toBe(10);
+    expect(calls[0]!.usage?.outputTokens).toBe(5);
+    expect(raw.closed).toBe(true);
+  });
+
+  it('replay supports the same surface (iterate + dispose, single emit)', async () => {
+    const recorded = [chunk('re'), chunk('play'), usageChunk(7, 3)];
+    const client = {
+      chat: {
+        completions: {
+          create: async (_p: unknown) => {
+            throw new Error('real create() must not run on replay');
+          },
+        },
+      },
+    };
+    instrument(client);
+    const replayer = (e: unknown) => (e instanceof LLMCall ? recorded : MISS);
+    addInterceptor(replayer);
+    try {
+      const stream = (await client.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [],
+        stream: true,
+      })) as StreamHandle;
+      const got: unknown[] = [];
+      for await (const c of stream) got.push(c);
+      await stream[Symbol.asyncDispose]();
+      expect(got).toEqual(recorded);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.metadata.replayed).toBe(true);
+      expect(calls[0]!.usage?.inputTokens).toBe(7);
+      expect(calls[0]!.usage?.outputTokens).toBe(3);
+    } finally {
+      removeInterceptor(replayer);
+    }
+  });
+});
+
 describe('instrument() — interceptors', () => {
   it('replay: an interceptor short-circuits the real call', async () => {
     const realCreate = vi.fn(async () => ({ usage: { prompt_tokens: 1, completion_tokens: 1 } }));

@@ -260,32 +260,94 @@ async function* fromArray(items: unknown[]): AsyncGenerator<unknown> {
   for (const item of items) yield item;
 }
 
+/** `Symbol.asyncDispose` if the runtime defines it (Node ≥ 20 / TS `using`); typed defensively
+ * because the compile target is ES2022, whose lib does not yet declare it. */
+const ASYNC_DISPOSE: symbol | undefined = (Symbol as { asyncDispose?: symbol }).asyncDispose;
+
 /**
- * Wraps a streaming response: chunks pass through unchanged and usage is accumulated, so the
- * `LLMCall` is emitted once with usage/cost/latency when the stream completes (or the consumer stops
- * early). The result is an async-iterable — the contract callers rely on (`for await (const chunk)`).
+ * State + behaviour for one wrapped streaming response. Chunks pass through unchanged and usage is
+ * accumulated, so the `LLMCall` is emitted **exactly once** (guarded by {@link finalized}) when the
+ * stream completes, or when the consumer stops early via `close()`/`Symbol.asyncDispose`. The public
+ * value handed back to callers is a `Proxy` (see {@link wrapStream}) that keeps this iteration
+ * behaviour while forwarding every other member (`.tee()`, `.controller`, `.response`,
+ * `.finalMessage()`, …) to the underlying SDK stream. Mirrors Python's `_AProxyStream`.
  */
-class AsyncStreamProxy implements AsyncIterable<unknown> {
+class StreamState {
+  finalized = false;
+  readonly chunks: unknown[] = [];
   constructor(
-    private readonly call: LLMCall,
-    private readonly stream: AsyncIterable<unknown>,
-    private readonly provider: string,
-    private readonly start: number,
-    private readonly replayChunks: unknown[] | null = null,
+    readonly call: LLMCall,
+    readonly stream: AsyncIterable<unknown>,
+    readonly provider: string,
+    readonly start: number,
+    readonly replayChunks: unknown[] | null = null,
   ) {}
 
-  async *[Symbol.asyncIterator](): AsyncGenerator<unknown> {
-    const chunks: unknown[] = [];
+  finalize(): void {
+    if (this.finalized) return;
+    this.finalized = true;
+    const finalChunks = this.replayChunks ?? this.chunks;
+    finalizeStream(this.call, finalChunks, this.provider, this.start);
+  }
+
+  async *iterate(): AsyncGenerator<unknown> {
     try {
       for await (const chunk of this.stream) {
-        chunks.push(chunk);
+        this.chunks.push(chunk);
         yield chunk;
       }
     } finally {
-      const finalChunks = this.replayChunks ?? chunks;
-      finalizeStream(this.call, finalChunks, this.provider, this.start);
+      this.finalize();
     }
   }
+
+  private async closeUnderlying(): Promise<void> {
+    const s = this.stream as unknown as Record<PropertyKey, unknown>;
+    const close = (s.close ?? s.aclose) as ((...a: unknown[]) => unknown) | undefined;
+    if (typeof close === 'function') {
+      const result = close.call(this.stream);
+      if (result != null && typeof (result as { then?: unknown }).then === 'function') {
+        await result;
+      }
+    }
+  }
+
+  async aclose(): Promise<void> {
+    try {
+      await this.closeUnderlying();
+    } finally {
+      this.finalize();
+    }
+  }
+}
+
+/**
+ * Wrap a {@link StreamState} in a `Proxy`: `Symbol.asyncIterator` runs the usage-capturing generator,
+ * `close`/`aclose`/`Symbol.asyncDispose` close the underlying stream and finalize once, and every
+ * other member is forwarded to the underlying SDK stream (functions bound so `this` is the stream).
+ */
+function wrapStream(state: StreamState): AsyncIterable<unknown> {
+  const handler: ProxyHandler<Record<PropertyKey, unknown>> = {
+    get(_target, prop) {
+      if (prop === Symbol.asyncIterator) return () => state.iterate();
+      if (prop === 'close' || prop === 'aclose') return () => state.aclose();
+      if (ASYNC_DISPOSE !== undefined && prop === ASYNC_DISPOSE) return () => state.aclose();
+      const value = (state.stream as unknown as Record<PropertyKey, unknown>)[prop];
+      if (typeof value === 'function') {
+        return (value as (...a: unknown[]) => unknown).bind(state.stream);
+      }
+      return value;
+    },
+    has(_target, prop) {
+      if (prop === Symbol.asyncIterator || prop === 'close' || prop === 'aclose') return true;
+      if (ASYNC_DISPOSE !== undefined && prop === ASYNC_DISPOSE) return true;
+      return prop in (state.stream as unknown as Record<PropertyKey, unknown>);
+    },
+  };
+  return new Proxy(
+    {} as Record<PropertyKey, unknown>,
+    handler,
+  ) as unknown as AsyncIterable<unknown>;
 }
 
 function proxyStream(
@@ -293,8 +355,8 @@ function proxyStream(
   stream: unknown,
   provider: string,
   start: number,
-): AsyncStreamProxy {
-  return new AsyncStreamProxy(call, stream as AsyncIterable<unknown>, provider, start);
+): AsyncIterable<unknown> {
+  return wrapStream(new StreamState(call, stream as AsyncIterable<unknown>, provider, start));
 }
 
 function replayStream(
@@ -302,9 +364,9 @@ function replayStream(
   recorded: unknown,
   provider: string,
   start: number,
-): AsyncStreamProxy {
+): AsyncIterable<unknown> {
   const chunks = Array.isArray(recorded) ? [...recorded] : recorded == null ? [] : [recorded];
-  return new AsyncStreamProxy(call, fromArray(chunks), provider, start, chunks);
+  return wrapStream(new StreamState(call, fromArray(chunks), provider, start, chunks));
 }
 
 function finalizeStream(call: LLMCall, chunks: unknown[], provider: string, start: number): void {
