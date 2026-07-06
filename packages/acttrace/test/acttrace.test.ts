@@ -104,6 +104,21 @@ describe('auto-capture + chain', () => {
     expect(detail).toContain('tampered');
   });
 
+  // Ported from PY tests/test_acttrace.py::{test_cli_verify, test_cli_missing_file_exits_nonzero_cleanly}
+  it('CLI main(["verify", path]) returns 0, then 1 after tampering', () => {
+    const path = tmpFile();
+    const log = new AuditLog('s', { path });
+    log.detach();
+    expect(main(['verify', path])).toBe(0);
+
+    writeFileSync(path, readFileSync(path, 'utf-8').replace(/"system"/g, '"SYSTEM"'));
+    expect(main(['verify', path])).toBe(1);
+  });
+
+  it('CLI main on a missing file exits non-zero cleanly (no throw)', () => {
+    expect(main(['verify', join(tmpFile('sub'), 'nope.jsonl')])).toBe(1);
+  });
+
   it('context_assembly is auto-captured by duck-type (no contextkit import)', async () => {
     const log = new AuditLog('s', { path: tmpFile() });
     try {

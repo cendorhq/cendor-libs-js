@@ -8,7 +8,9 @@
 /** Presidio entity types redacted by default (kept for parity — unused in the JS port). */
 export const DEFAULT_NER_ENTITIES = ['PERSON', 'LOCATION', 'NRP', 'DATE_TIME'] as const;
 
-const INSTALL_HINT = "NER redaction needs the optional extra: pip install 'cendor-acttrace[ner]'";
+const INSTALL_HINT =
+  'NER-backed redaction is not available in @cendor/acttrace (regex/pattern detectors only; ' +
+  'Presidio NER is Python-only). Use the Python cendor-acttrace[ner] extra if you need it.';
 
 /** `true` if an NER backend is importable. The JS port has none, so always `false`. */
 export function nerAvailable(): boolean {

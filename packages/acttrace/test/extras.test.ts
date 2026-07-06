@@ -101,7 +101,8 @@ describe('NER adapter (absent in the JS port)', () => {
     expect(nerAvailable()).toBe(false);
   });
 
-  it('ner_redactor() throws a clear install-hint error', () => {
-    expect(() => nerRedactor()).toThrow(/cendor-acttrace\[ner\]/);
+  it('ner_redactor() throws a clear JS-honest not-available error', () => {
+    expect(() => nerRedactor()).toThrow(/not available in @cendor\/acttrace/);
+    expect(() => nerRedactor()).toThrow(/Python-only/);
   });
 });
