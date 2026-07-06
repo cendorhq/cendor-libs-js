@@ -1,7 +1,6 @@
 # @cendor/acttrace
 
-A tamper-evident, auto-populated audit log for AI decisions. The TypeScript port of
-`cendor.acttrace` (regex/pattern detectors only — no Presidio).
+An automatic, tamper-evident log of your AI's decisions — every model and tool call is recorded and can be verified offline; change any past entry and the check fails. The TypeScript port of `cendor.acttrace` (regex/pattern detectors only — no Presidio).
 
 Construct an `AuditLog` and it **subscribes** to `@cendor/core`'s event bus: every instrumented
 model/tool call becomes a hash-chained audit entry with zero per-call wiring. You add only the

@@ -1,7 +1,6 @@
 # @cendor/contextkit
 
-**Assemble LLM context to a token budget — with a receipt.** The TypeScript port of
-[`cendor.contextkit`](https://github.com/cendorhq/cendor-libs/tree/main/packages/cendor-contextkit).
+**Fit a prompt into the model's token budget.** Add your messages and context, pin what must stay, and the least-important parts are dropped to make everything fit. The TypeScript port of [`cendor.contextkit`](https://github.com/cendorhq/cendor-libs/tree/main/packages/cendor-contextkit).
 
 Treat the context window like a packed suitcase: declare `Block`s with a priority, a `pin`, and a
 per-block eviction rule; `assemble()` packs them to a token budget **deterministically**, and

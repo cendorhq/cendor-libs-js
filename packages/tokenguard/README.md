@@ -1,7 +1,6 @@
 # @cendor/tokenguard
 
-Pre-flight cost caps + free per-tag spend attribution for LLM calls. The TypeScript port of
-`cendor.tokenguard`.
+Spending limits for LLM calls: stop a call before it runs if it would blow the budget, and see cost broken down per feature. The TypeScript port of `cendor.tokenguard`.
 
 tokenguard **subscribes** to `@cendor/core`'s event bus and registers a pre-flight interceptor — it
 never patches a client itself (the locked architecture: one `instrument()`, many subscribers). Once a

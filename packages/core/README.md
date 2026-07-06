@@ -1,9 +1,6 @@
 # @cendor/core
 
-The shared foundation of the Cendor stack — the TypeScript port of
-[`cendor.core`](https://github.com/cendorhq/cendor-libs/tree/main/packages/cendor-core). Types, an
-event bus, decimal-safe `Money`, an offline price table, provider-aware token counting, and
-`instrument()`. Zero orchestration; every other `@cendor/*` package cooperates through this.
+Wrap your LLM client once and capture exact token counts and cost on every call — the shared foundation the other Cendor tools build on. The TypeScript port of [`cendor.core`](https://github.com/cendorhq/cendor-libs/tree/main/packages/cendor-core): shared types, an event bus, decimal-safe `Money`, an offline price table, provider-aware token counting, and `instrument()`. Every other `@cendor/*` package cooperates through this.
 
 ```bash
 npm i @cendor/core

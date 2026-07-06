@@ -1,8 +1,6 @@
 # @cendor/squeeze
 
-Shrink verbose context — JSON, logs, code, prose — without throwing anything away. Compression
-returns a *handle*; the original is always restorable, byte-for-byte. Content-aware: each type gets a
-purpose-built, **deterministic** compressor — no LLM, no model download, byte-reproducible.
+Shrink long prompts to hit a token budget and expand them back exactly — the same input always produces the same output, with no LLM and no model download. Compression returns a *handle*; the original is always restorable, byte-for-byte. The TypeScript port of [`cendor-squeeze`](https://github.com/cendorhq/cendor-libs).
 
 The TypeScript port of [`cendor-squeeze`](https://github.com/cendorhq/cendor-libs). Satisfies
 `@cendor/core`'s `Compressor` protocol by shape, so context tooling can use it without importing it.

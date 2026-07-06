@@ -1,7 +1,6 @@
 # @cendor/libs
 
-Umbrella meta-package — the TypeScript port of the `cendor-libs` meta-package. One install pulls all
-six Cendor libraries:
+All six Cendor libraries in one install — plain building blocks for LLM apps: context, cost, compression, testing, and a tamper-evident audit trail. The TypeScript port of the `cendor-libs` meta-package. One install pulls them all:
 
 ```bash
 npm i @cendor/libs

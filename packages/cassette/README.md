@@ -1,8 +1,6 @@
 # @cendor/cassette
 
-Record an agent run once, replay it forever — offline, deterministic, free. The TypeScript port of
-[`cendor.cassette`](https://github.com/cendorhq/cendor-libs), byte-conformant with the Python package
-(same request hashes, same on-disk `cassette/2` format).
+Record real LLM calls once, then replay them in your tests forever — offline, no API key, no cost, and the same result every run. The TypeScript port of [`cendor.cassette`](https://github.com/cendorhq/cendor-libs), byte-conformant with the Python package (same request hashes, same on-disk `cassette/2` format).
 
 The `vcrpy` of the agent era, except it captures the _whole_ run: every LLM call and tool call, in
 order. It cooperates through `@cendor/core` — it never patches a client itself. It **records** by
