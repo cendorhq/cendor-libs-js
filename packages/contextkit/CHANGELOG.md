@@ -2,6 +2,11 @@
 
 ## 1.0.0
 
+> Note: the jump to `1.0.0` was an automatic **major** bump emitted by changesets when the
+> `@cendor/squeeze` peer dependency was versioned — not a breaking API change. This is the initial
+> public release of `@cendor/contextkit`. Package versions are independent per-package and
+> per-language (see the parity page), so a `1.0.0` alongside `0.2.0` siblings is expected.
+
 ### Minor Changes
 
 - 94d7d95: Initial releases of the pure-compute libraries — TS ports of `cendor.squeeze`, `cendor.tokenguard`,
