@@ -1,7 +1,7 @@
 {
   "name": "@cendor/core",
   "version": "0.3.0",
-  "description": "The shared foundation of the Cendor stack: types, event bus, decimal-safe Money, price table, token counting, and instrument(). The TypeScript port of cendor.core.",
+  "description": "Wrap your LLM client once and capture exact token counts and cost on every call — the shared foundation the other Cendor tools build on.",
   "type": "module",
   "license": "Apache-2.0",
   "main": "./dist/index.js",
