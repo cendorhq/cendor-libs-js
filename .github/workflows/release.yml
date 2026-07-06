@@ -7,15 +7,16 @@ on:
 concurrency: release-${{ github.ref }}
 
 permissions:
-  contents: write # create the version PR + git tags
-  pull-requests: write # open/update the "Version Packages" PR
-  id-token: write # npm provenance + OIDC trusted publishing (tokenless)
+  contents: write # commit the version bump + push tags back to main
+  id-token: write # npm provenance via OIDC
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so changeset publish can tag
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -25,23 +26,20 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
-      # Changesets: when changesets are present, opens/updates a "Version Packages" PR that bumps
-      # versions + writes CHANGELOGs. When that PR merges (versions already bumped, no changesets left),
-      # `publish` runs and publishes the changed @cendor/* packages to npm.
-      #
-      # Publishing authenticates with the `NPM_TOKEN` repo secret (an npm **automation** token for the
-      # `cendor` org — it can create brand-new packages, so the first release needs no manual bootstrap).
-      # `provenance:true` in each package's publishConfig + `id-token: write` attach a provenance
-      # attestation via OIDC. Changesets tags each published package `@cendor/<x>@<version>`, so the git
-      # tag ≍ the manifest version by construction. (To switch to tokenless trusted publishing later,
-      # configure each package's Trusted Publisher on npmjs.com and drop NODE_AUTH_TOKEN — see PUBLISHING.md.)
-      - name: Create Release PR or publish
-        uses: changesets/action@v1
-        with:
-          version: pnpm version-packages
-          publish: pnpm release
-          commit: "chore: version packages"
-          title: "chore: version packages"
+      # Direct publish on push (no Version PR), mirroring the Python release flow: when changesets are
+      # present, `changeset version` bumps versions + writes CHANGELOGs, we commit that back to main
+      # ([skip ci] so it doesn't re-trigger), then `changeset publish` publishes the bumped @cendor/*
+      # packages to npm (pnpm replaces workspace:^ with real ranges) with provenance and tags each
+      # `@cendor/<x>@<version>`. A run with no changesets versions nothing and publishes nothing.
+      - name: Version + publish
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          pnpm exec changeset version
+          git add -A
+          git commit -m "chore: version packages [skip ci]" || echo "no version changes to commit"
+          pnpm exec changeset publish
+          git push --follow-tags origin HEAD:main || echo "nothing to push"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
