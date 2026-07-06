@@ -1,8 +1,31 @@
-# Publishing `@cendor/*` (manual first-publish + trusted-publisher setup)
+# Publishing `@cendor/*`
 
-Nothing here is published yet. This is the one-time setup + first-publish runbook. It mirrors the
-PyPI OIDC discipline: **tokenless publishing via npm trusted publishing + provenance**, versions
-driven by Changesets, git tag ≍ manifest version by construction.
+Nothing is published yet. Two paths — **Option A is wired and active**; Option B is optional later.
+
+## Option A — automated with `NPM_TOKEN` (active) ✅
+
+`release.yml` authenticates with an npm **automation** token, which can create brand-new packages, so
+the very first release is automated too (no manual bootstrap). One-time setup:
+
+1. npmjs.com → avatar → **Access Tokens → Generate → Automation** (as an owner/member of the `cendor`
+   org). Copy the token.
+2. GitHub → this repo → **Settings → Secrets and variables → Actions → New repository secret**:
+   name `NPM_TOKEN`, value = the token.
+3. Land a changeset (`pnpm changeset`), push to `main`. `release.yml` opens a **"Version Packages"**
+   PR (bumps versions + CHANGELOGs). Merge it → the workflow **publishes** the changed `@cendor/*`
+   packages with provenance and tags each `@cendor/<x>@<version>`. Done — every future release is the
+   same two-step (changeset → merge version PR).
+
+Publish this repo's libs **before** `@cendor/sdk` (the SDK depends on them). Versions are independent
+from the Python packages; parity is documented, never version-coupled.
+
+## Option B — tokenless OIDC trusted publishing (optional, more secure)
+
+Drop `NODE_AUTH_TOKEN` from `release.yml` and instead configure each package's **Trusted Publisher**
+on npmjs.com (§2 below). Caveat: trusted publishing can't bind to a package that doesn't exist yet, so
+each package needs one **manual first publish** (§1) before its trusted publisher can take over.
+
+---
 
 ## 0. Prerequisites
 - The npm org **`cendor`** exists and you're an owner (it does — the `@cendor/*` scope is registered).

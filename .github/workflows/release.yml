@@ -31,10 +31,12 @@ jobs:
       # versions + writes CHANGELOGs. When that PR merges (versions already bumped, no changesets left),
       # `publish` runs and publishes the changed @cendor/* packages to npm.
       #
-      # Publishing uses npm OIDC **trusted publishing** (no NPM_TOKEN): configure each package's trusted
-      # publisher on npmjs.com to this repo + workflow first (see PUBLISHING.md). `provenance:true` in
-      # each package's publishConfig attaches a provenance attestation. Changesets tags each published
-      # package `@cendor/<x>@<version>`, so the git tag ≍ the manifest version by construction.
+      # Publishing authenticates with the `NPM_TOKEN` repo secret (an npm **automation** token for the
+      # `cendor` org — it can create brand-new packages, so the first release needs no manual bootstrap).
+      # `provenance:true` in each package's publishConfig + `id-token: write` attach a provenance
+      # attestation via OIDC. Changesets tags each published package `@cendor/<x>@<version>`, so the git
+      # tag ≍ the manifest version by construction. (To switch to tokenless trusted publishing later,
+      # configure each package's Trusted Publisher on npmjs.com and drop NODE_AUTH_TOKEN — see PUBLISHING.md.)
       - name: Create Release PR or publish
         uses: changesets/action@v1
         with:
@@ -44,4 +46,5 @@ jobs:
           title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
