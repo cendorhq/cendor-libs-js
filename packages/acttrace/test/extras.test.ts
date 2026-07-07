@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DETECTORS, verhoeff } from '../src/detectors.js';
 import {
+  AuditLog,
+  defaultRedactor,
   enableEntropyDetector,
   enableLocalePack,
   nerAvailable,
@@ -95,14 +97,60 @@ describe('entropy detector', () => {
   });
 });
 
-describe('NER adapter (absent in the JS port)', () => {
-  it('ner_available() is a boolean and false', () => {
-    expect(typeof nerAvailable()).toBe('boolean');
-    expect(nerAvailable()).toBe(false);
+describe('NER adapter (compromise backend)', () => {
+  it('nerAvailable() is true when the optional compromise dependency is present', () => {
+    expect(nerAvailable()).toBe(true);
   });
 
-  it('ner_redactor() throws a clear JS-honest not-available error', () => {
-    expect(() => nerRedactor()).toThrow(/not available in @cendor\/acttrace/);
-    expect(() => nerRedactor()).toThrow(/Python-only/);
+  it('redacts PERSON and LOCATION spans with the <redacted> token, preserving surrounds', () => {
+    const redact = nerRedactor(['PERSON', 'LOCATION']);
+    expect(redact('John Smith flew to Paris on business')).toBe(
+      '<redacted> flew to <redacted> on business',
+    );
+  });
+
+  it('only redacts the requested entity types', () => {
+    const out = nerRedactor(['PERSON'])('Alice met Bob in Berlin') as string;
+    expect(out).toBe('<redacted> met <redacted> in Berlin'); // names gone, location kept
+  });
+
+  it('walks dicts and arrays', () => {
+    const out = nerRedactor(['PERSON'])({ note: 'call John Smith', tags: ['ask Mary'] }) as {
+      note: string;
+      tags: string[];
+    };
+    expect(out.note).toBe('call <redacted>');
+    expect(out.tags[0]).toBe('ask <redacted>');
+  });
+
+  it('runs compose (regex scrub) first, then NER', () => {
+    // defaultRedactor scrubs the email; NER then scrubs the name — both gone.
+    const out = nerRedactor(
+      ['PERSON'],
+      'en',
+      defaultRedactor,
+    )('email John Smith at alice@example.com') as string;
+    expect(out).not.toContain('alice@example.com');
+    expect(out).not.toContain('John Smith');
+    expect(out).toContain('<redacted>');
+  });
+
+  it('leaves entity-free text unchanged', () => {
+    expect(nerRedactor(['PERSON', 'LOCATION'])('the quick brown fox jumps')).toBe(
+      'the quick brown fox jumps',
+    );
+  });
+
+  it('plugs into AuditLog as a custom redactor (bypasses the built-in policy path)', async () => {
+    const log = new AuditLog('test-system', {
+      redactor: nerRedactor(['PERSON', 'LOCATION'], 'en', defaultRedactor),
+    });
+    await log.decision(() => 'ok', { input: 'John Smith requested a refund from Paris' });
+    const entry = log.entries.find((e) => e.type === 'decision');
+    expect(entry).toBeDefined();
+    const input = (entry?.payload as { input?: string }).input ?? '';
+    expect(input).not.toContain('John Smith');
+    expect(input).not.toContain('Paris');
+    expect(input).toContain('<redacted>');
   });
 });
