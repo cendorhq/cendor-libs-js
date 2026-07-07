@@ -1,5 +1,15 @@
 # @cendor/acttrace
 
+## 0.3.3
+
+### Patch Changes
+
+- aa12f36: Packaging and docs: ship LICENSE + NOTICE inside each published tarball, add `homepage` and
+  `bugs` metadata, and add npm-version + Apache-2.0 badges plus a README banner. No API or runtime
+  changes.
+- Updated dependencies [aa12f36]
+  - @cendor/core@0.3.3
+
 ## 0.3.2
 
 ### Patch Changes
