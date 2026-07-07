@@ -254,7 +254,7 @@ const answer = await using('tests/fixtures/run.json', { mode: 'auto' }, async ()
 - **Decisions & human oversight** — `log.decision(async (d) => …, { input })` groups a unit of work; `d.record({...})` and `d.humanOversight(reviewer, action)` capture Art. 14-style sign-off.
 - **Offline detection engine + policy** — a validator-gated `Detector` registry of **20 categories** (secrets, PII, financial, government IDs, GDPR special-category), plus a `Policy` (`Policy.default/gdpr/pci/strict`). Regex + local checksums (Luhn / IBAN mod-97 / Verhoeff / ABA) — no model, no network. `scan()` / `redact()` work standalone; `guard(policy, audit)` wires enforcement onto core's interceptor seam.
 - **Compliance evidence packs** — `log.export(path, framework)` annotates each entry with control IDs for **EU AI Act**, **GDPR**, **ISO/IEC 42001**, and **NIST AI RMF** (starting templates), and writes a signed `_meta` completeness header.
-- **Regex/pattern detectors only** — the JS port intentionally ships no Presidio NER (`nerAvailable()` → `false`); opt-in locale packs via `enableLocalePack('uk' | 'in')`.
+- **Regex/pattern detectors + optional NER** — 20 offline detectors and checksum validators by default; free-text names/places/orgs can also be redacted via the optional `compromise` peer dep (`nerRedactor()`, English-only, lighter than Python's Presidio — not full parity; `nerAvailable()` reports presence). Opt-in locale packs via `enableLocalePack('uk' | 'in')`.
 
 ```ts
 import { instrument } from '@cendor/core';
@@ -379,7 +379,7 @@ Knowing exactly where the edges are is part of the design:
 
 - **Byte-for-byte with Python where it counts** — cassettes, audit chains, prices, and bus events are interoperable across languages; the token *method* (`js-tiktoken`) matches Python's `tiktoken`.
 - **Two deliberate adaptations from the Python API.** contextkit collapses Python's sync `assemble` + async `aassemble` into **one async `assemble()`** (so `whatif` and provider adapters are async too); context/budget/session scoping uses `AsyncLocalStorage` (propagates across `await`, not across worker threads — the same caveat as `contextvars` vs OS threads).
-- **Python-only for now** — the LangChain.js callback handler, Presidio NER (`acttrace` ships regex/pattern detectors only), and cassette's static-embedding `localEmbeddingScorer` (wire your own via `embeddingScorer(embedFn)`). Source of truth: the [parity matrix](https://cendor.ai/docs/languages) + [`docs/parity.md`](docs/parity.md).
+- **Python-only for now** — the LangChain.js callback handler and cassette's static-embedding `localEmbeddingScorer` (wire your own via `embeddingScorer(embedFn)`). `acttrace` NER *is* available in TypeScript via the optional `compromise` peer dep (English-only, lighter than Python's Presidio — not full parity). Source of truth: the [parity matrix](https://cendor.ai/docs/languages) + [`docs/parity.md`](docs/parity.md).
 - **`tokenguard` enforcement is projection-based.** Pre-flight `block` / `downgrade` use offline token estimates plus an output reserve, so they're approximate; post-flight `raise` is exact but stops the **next** call in a loop. An unpriced model records `$0`, so a USD cap can't bite it — a token cap enforces regardless.
 - **`acttrace` is evidence, not a guarantee.** The hash chain detects edits/deletions on `verify()`; **HMAC signing** is what makes it tamper-evident against a rewrite. Control mappings are starting templates for a compliance team, not legal advice.
 

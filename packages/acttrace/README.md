@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@cendor/acttrace.svg)](https://www.npmjs.com/package/@cendor/acttrace) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-An automatic, tamper-evident log of your AI's decisions — every model and tool call is recorded and can be verified offline; change any past entry and the check fails. The TypeScript port of `cendor.acttrace` (regex/pattern detectors only — no Presidio).
+An automatic, tamper-evident log of your AI's decisions — every model and tool call is recorded and can be verified offline; change any past entry and the check fails. The TypeScript port of `cendor.acttrace` (regex/pattern detectors + optional `compromise`-backed NER — not Presidio-parity).
 
 Construct an `AuditLog` and it **subscribes** to `@cendor/core`'s event bus: every instrumented
 model/tool call becomes a hash-chained audit entry with zero per-call wiring. You add only the
@@ -60,7 +60,7 @@ const [ok, detail] = verify('audit.jsonl'); // re-walk offline; catches any edit
 | `guard(policy?, audit?, onBlock?)` | Interceptor for `addInterceptor`: block (throw) / redact-before-send (`Reroute`) / flag. `PolicyViolation.findings`. |
 | `DETECTORS`, `registerDetector`, `detectors`, `Detector` | The 20-detector registry (validators: Luhn / IBAN mod-97 / Verhoeff / ABA / SSN / phone / BIC). |
 | `enableLocalePack('uk'\|'in')`, `enableEntropyDetector()`, `LOCALE_PACKS` | Opt-in packs (off by default). |
-| `nerAvailable()` / `nerRedactor()` | Regex-only port: returns `false` / throws (no Presidio in JS). |
+| `nerAvailable()` / `nerRedactor()` | Optional NER via the `compromise` peer dep: `nerAvailable()` reports presence; `nerRedactor()` returns a working name/place/org redactor when installed, else throws a clear install hint (English-only, lighter than Presidio — not parity). |
 | `chainHash`, `metaSignature`, `GENESIS`, `AuditEntry`, `BoundedMemoryWithoutPathWarning` | Low-level conformance primitives + types. |
 
 Wire the guard in one line:
@@ -81,5 +81,6 @@ log.decision(...) as d:`) become the async-callback form `await log.decision(asy
 scoped with `node:async_hooks` `AsyncLocalStorage`. Class/type/error names are byte-identical
 (`AuditLog`, `AuditEntry`, `Policy`, `Finding`, `Detector`, `PolicyViolation`, `verify`). Hashing is
 synchronous via `node:crypto`; storage (fs/memory) and crypto are lazily required so importing the
-package never forces Node built-ins into a browser bundle. NER is intentionally absent — the JS port
-ships the regex/pattern detectors only.
+package never forces Node built-ins into a browser bundle. NER is optional — install the `compromise`
+peer dep to enable `nerRedactor()` (English-only, lighter than Python's Presidio backend); the default
+install stays pure-regex and dependency-light.
