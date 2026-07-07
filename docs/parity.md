@@ -28,7 +28,7 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 | **contextkit** assemble/evict/order | ✅ | ✅ | single async `assemble()` (Py sync+async collapsed) |
 | **squeeze** compress/decompress | ✅ | ✅ | deterministic; sha256 handle ids match |
 | **cassette** record/replay | ✅ | ✅ | Python-recorded cassette replays in JS (vector-verified) |
-| cassette `local_embedding_scorer` | ✅ | **Py-only** | TS ships a declared stub; static-embedding scorer is Py-only for now |
+| cassette `local_embedding_scorer` (bundled model2vec) | ✅ | **Py-only** | no JS static-embedding package exists; TS uses the BYO `embeddingScorer(embedFn)` / `openaiEmbeddingScorer` seam instead |
 | cassette storage | fs | fs + memory (+ IndexedDB-shaped) | pluggable adapters |
 | **acttrace** chain/verify/sign | ✅ | ✅ | JS-written chain `verify()`s in Python (HMAC + `_meta`) |
 | acttrace detectors | ✅ regex **+ Presidio NER** | ✅ regex/pattern (20 detectors + validators) | **NER is Py-only** (`ner_available()` → false) |
