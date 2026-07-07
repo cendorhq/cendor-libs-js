@@ -1,5 +1,7 @@
 # @cendor/cassette
 
+[![npm version](https://img.shields.io/npm/v/@cendor/cassette.svg)](https://www.npmjs.com/package/@cendor/cassette) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 Record real LLM calls once, then replay them in your tests forever — offline, no API key, no cost, and the same result every run. The TypeScript port of [`cendor.cassette`](https://github.com/cendorhq/cendor-libs), byte-conformant with the Python package (same request hashes, same on-disk `cassette/2` format).
 
 The `vcrpy` of the agent era, except it captures the _whole_ run: every LLM call and tool call, in

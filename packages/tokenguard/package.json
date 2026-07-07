@@ -18,7 +18,9 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "sideEffects": [
     "./dist/index.js"
@@ -51,6 +53,10 @@
     "type": "git",
     "url": "git+https://github.com/cendorhq/cendor-libs-js.git",
     "directory": "packages/tokenguard"
+  },
+  "homepage": "https://cendor.ai/docs/tokenguard",
+  "bugs": {
+    "url": "https://github.com/cendorhq/cendor-libs-js/issues"
   },
   "publishConfig": {
     "access": "public"

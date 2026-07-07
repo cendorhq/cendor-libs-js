@@ -1,6 +1,6 @@
 import { AuditLog } from '../packages/acttrace/dist/index.js';
 /**
- * Cross-language round-trip check (the JS-3 exit criterion, reverse direction):
+ * Cross-language round-trip check (reverse direction):
  * write a signed audit chain with the JS @cendor/acttrace, so the Python `cendor.acttrace.verify()`
  * can confirm it verifies. Run from the cendor-libs-js repo root so `@cendor/*` resolve:
  *

@@ -10,8 +10,8 @@ cross-language interop fails CI, not a user.
 | `prices.json` | `estimate()` cost math + the bundled model table | `prices/1` |
 | `money.json` | `Money` arithmetic/serialization + `Usage` conventions | `events/1` |
 | `tokens.json` | token counts + method selection (real `tiktoken` ↔ `js-tiktoken`) | — |
-| `cassette/*` | recorded cassettes that must replay in JS (added in JS-3) | `cassette/2` |
-| `acttrace/*` | signed chains that must `verify` cross-language (added in JS-3) | `acttrace-chain/1` |
+| `cassette/*` | recorded cassettes that must replay in JS | `cassette/2` |
+| `acttrace/*` | signed chains that must `verify` cross-language | `acttrace-chain/1` |
 
 ## Money: value equality, not byte-identical strings
 

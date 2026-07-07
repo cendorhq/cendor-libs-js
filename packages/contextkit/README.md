@@ -1,5 +1,7 @@
 # @cendor/contextkit
 
+[![npm version](https://img.shields.io/npm/v/@cendor/contextkit.svg)](https://www.npmjs.com/package/@cendor/contextkit) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 **Fit a prompt into the model's token budget.** Add your messages and context, pin what must stay, and the least-important parts are dropped to make everything fit. The TypeScript port of [`cendor.contextkit`](https://github.com/cendorhq/cendor-libs/tree/main/packages/cendor-contextkit).
 
 Treat the context window like a packed suitcase: declare `Block`s with a priority, a `pin`, and a

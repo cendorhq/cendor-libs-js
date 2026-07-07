@@ -1,5 +1,7 @@
 # @cendor/libs
 
+[![npm version](https://img.shields.io/npm/v/@cendor/libs.svg)](https://www.npmjs.com/package/@cendor/libs) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 All six Cendor libraries in one install — plain building blocks for LLM apps: context, cost, compression, testing, and a tamper-evident audit trail. The TypeScript port of the `cendor-libs` meta-package. One install pulls them all:
 
 ```bash

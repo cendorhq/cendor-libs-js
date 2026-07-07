@@ -1,5 +1,7 @@
 # @cendor/core
 
+[![npm version](https://img.shields.io/npm/v/@cendor/core.svg)](https://www.npmjs.com/package/@cendor/core) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 Wrap your LLM client once and capture exact token counts and cost on every call — the shared foundation the other Cendor tools build on. The TypeScript port of [`cendor.core`](https://github.com/cendorhq/cendor-libs/tree/main/packages/cendor-core): shared types, an event bus, decimal-safe `Money`, an offline price table, provider-aware token counting, and `instrument()`. Every other `@cendor/*` package cooperates through this.
 
 ```bash

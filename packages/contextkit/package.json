@@ -14,7 +14,9 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "sideEffects": false,
   "engines": {
@@ -47,6 +49,10 @@
     "type": "git",
     "url": "git+https://github.com/cendorhq/cendor-libs-js.git",
     "directory": "packages/contextkit"
+  },
+  "homepage": "https://cendor.ai/docs/contextkit",
+  "bugs": {
+    "url": "https://github.com/cendorhq/cendor-libs-js/issues"
   },
   "publishConfig": {
     "access": "public"

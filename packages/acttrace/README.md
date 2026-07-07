@@ -1,5 +1,7 @@
 # @cendor/acttrace
 
+[![npm version](https://img.shields.io/npm/v/@cendor/acttrace.svg)](https://www.npmjs.com/package/@cendor/acttrace) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 An automatic, tamper-evident log of your AI's decisions — every model and tool call is recorded and can be verified offline; change any past entry and the check fails. The TypeScript port of `cendor.acttrace` (regex/pattern detectors only — no Presidio).
 
 Construct an `AuditLog` and it **subscribes** to `@cendor/core`'s event bus: every instrumented
