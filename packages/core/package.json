@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./langchain": {
+      "types": "./dist/langchain.d.ts",
+      "default": "./dist/langchain.js"
     }
   },
   "files": [
@@ -27,9 +31,13 @@
     "js-tiktoken": "^1.0.15"
   },
   "peerDependencies": {
+    "@langchain/core": ">=0.3",
     "@opentelemetry/api": ">=1"
   },
   "peerDependenciesMeta": {
+    "@langchain/core": {
+      "optional": true
+    },
     "@opentelemetry/api": {
       "optional": true
     }
@@ -54,5 +62,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "@langchain/core": "^1.2.1"
   }
 }
