@@ -31,7 +31,7 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 | cassette `local_embedding_scorer` | ✅ | **Py-only** | TS ships a declared stub; static-embedding scorer is Py-only for now |
 | cassette storage | fs | fs + memory (+ IndexedDB-shaped) | pluggable adapters |
 | **acttrace** chain/verify/sign | ✅ | ✅ | JS-written chain `verify()`s in Python (HMAC + `_meta`) |
-| acttrace detectors | ✅ regex **+ Presidio NER** | ✅ regex/pattern (20 detectors + validators) | **NER is Py-only** (`ner_available()` → false) |
+| acttrace detectors | ✅ regex **+ Presidio NER** | ✅ regex/pattern (20 detectors + validators) **+ NER** | 🚧 NER via optional `compromise` (English-only, sync, lighter than Presidio — not parity); `nerAvailable()` reports presence |
 | acttrace storage | fs | fs + memory | pluggable adapters |
 
 ## Runtime targets (TS)
