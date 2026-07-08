@@ -32,6 +32,22 @@ function o200k(): Tiktoken | null {
   return o200kCache;
 }
 
+// Eager warm-up: js-tiktoken decodes the ~2.3 MB `o200k_base` BPE table lazily on first use, so the
+// first `count()` in a process otherwise stalls ~1 ms. Building it once at module import moves that
+// cost off the hot path (subsequent counts are ~100 µs). Runs exactly once and never throws — a
+// failed warm leaves `o200kCache` unset so the normal lazy path still applies on first real use.
+let warmed = false;
+function warmDefaultEncoder(): void {
+  if (warmed) return;
+  warmed = true;
+  try {
+    o200k();
+  } catch {
+    // ignore: warming is a pure optimization; fall back to the lazy build on first count()
+  }
+}
+warmDefaultEncoder();
+
 function tiktokenEncoding(model: string): Tiktoken | null {
   const cached = encCache.get(model);
   if (cached) return cached;

@@ -8,7 +8,11 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 
-/** A tamper-evident-chain backend: truncate-open, append durable lines, and re-read the full chain. */
+/**
+ * A tamper-evident-chain backend: append durable lines and re-read the full chain. The fs adapter
+ * either truncates on open (a fresh log / export pack) or opens in append mode so an existing chain
+ * is preserved and `AuditLog` can resume it — see {@link fsChainStorage}.
+ */
 export interface ChainStorage {
   appendLine(line: string): void;
   readLines(): string[];
@@ -52,13 +56,15 @@ function nodePath(): NodePath {
 }
 
 /**
- * Filesystem chain storage (the Node default): truncate-open on creation, `write`+`fsync` each line
- * for durability, re-read the full chain from disk on demand (so a bounded in-memory log can still
- * export/verify the complete file).
+ * Filesystem chain storage (the Node default): `write`+`fsync` each line for durability and re-read
+ * the full chain from disk on demand (so a bounded in-memory log can still export/verify the complete
+ * file). Opens **truncating** by default (a fresh log or an export pack); pass `{ append: true }` to
+ * open in **append** mode instead, which preserves an existing log so `AuditLog` can resume the chain
+ * on reopen rather than wiping it. Append-open on a fresh/empty path behaves like create.
  */
-export function fsChainStorage(path: string): ChainStorage {
+export function fsChainStorage(path: string, opts: { append?: boolean } = {}): ChainStorage {
   nodeFs().mkdirSync(nodePath().dirname(path), { recursive: true });
-  let fd: number | null = nodeFs().openSync(path, 'w');
+  let fd: number | null = nodeFs().openSync(path, opts.append ? 'a' : 'w');
   return {
     appendLine: (line: string) => {
       if (fd === null) {

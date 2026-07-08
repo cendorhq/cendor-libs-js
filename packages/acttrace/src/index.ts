@@ -434,9 +434,72 @@ export class AuditLog {
       );
     }
     this._maxEntries = maxEntries;
-    this._storage = storage ?? (path !== null ? fsChainStorage(path) : memoryChainStorage());
-    this._append('audit_open', { system, risk_tier: riskTier });
+    // Append-open (not truncate) so reopening an existing log preserves it and we can resume the
+    // chain. `export()` still uses a truncating fsChainStorage — this append mode is the live log only.
+    this._storage =
+      storage ?? (path !== null ? fsChainStorage(path, { append: true }) : memoryChainStorage());
+    // Resume an existing chain instead of restarting it: if the backing store already holds entries
+    // (a non-empty log file being reopened), continue from its head with NO fresh `audit_open`. A
+    // pristine store (fresh/empty file, memory backend) keeps the original behaviour: seed audit_open.
+    const existing = this._storage
+      .readLines()
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith('{"_meta"'));
+    if (existing.length > 0) {
+      this._resume(existing);
+    } else {
+      this._append('audit_open', { system, risk_tier: riskTier });
+    }
     bus.subscribe(this._onEvent);
+  }
+
+  /**
+   * @internal Rehydrate from an existing on-disk chain (reopen/resume). Sets `_head`/`_seq` from the
+   * last entry, loads the tail into memory honouring `maxEntries` (older entries stay only on disk and
+   * are counted as evicted so `export()` re-reads the full file), and does NOT emit `audit_open` — a
+   * pure continuation. Throws if a retained line is unparseable: a corrupt tail fails loudly rather
+   * than silently restarting the chain from GENESIS.
+   */
+  private _resume(dataLines: string[]): void {
+    const total = dataLines.length;
+    const keep = this._maxEntries !== null ? Math.min(this._maxEntries, total) : total;
+    const tail = dataLines.slice(total - keep);
+    const rehydrated = tail.map((line) => this._parseResumedEntry(line));
+    const last = rehydrated[rehydrated.length - 1]!; // total > 0 ⇒ keep ≥ 1 ⇒ last exists
+    this.entries = rehydrated;
+    this._head = last.hash;
+    this._seq = Number(last.seq) + 1;
+    this._evictedFromMemory = total - keep;
+  }
+
+  /** @internal Parse one persisted JSONL entry when resuming; throw a clear error if it is corrupt. */
+  private _parseResumedEntry(line: string): AuditEntry {
+    let row: PyValue;
+    try {
+      row = parsePreserving(line);
+    } catch (e) {
+      throw new ValueError(
+        `cannot resume audit log ${this._path}: corrupt entry line: ${errMessage(e)}`,
+      );
+    }
+    if (row === null || typeof row !== 'object' || Array.isArray(row)) {
+      throw new ValueError(`cannot resume audit log ${this._path}: entry is not a JSON object`);
+    }
+    const obj = row as Record<string, PyValue>;
+    for (const field of ['seq', 'ts', 'type', 'prev_hash', 'hash']) {
+      if (!(field in obj)) {
+        throw new ValueError(`cannot resume audit log ${this._path}: entry missing '${field}'`);
+      }
+    }
+    return new AuditEntry(
+      obj.seq as number | bigint,
+      obj.ts as string,
+      obj.type as string,
+      obj.payload ?? null,
+      obj.prev_hash as string,
+      obj.hash as string,
+      typeof obj.sig === 'string' ? obj.sig : '',
+    );
   }
 
   /** The current chain head hash. Capture it to later assert completeness via `verify`. */
