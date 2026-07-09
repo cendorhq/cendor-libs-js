@@ -11,6 +11,7 @@
     { "path": "../tokenguard" },
     { "path": "../contextkit" },
     { "path": "../squeeze" },
+    { "path": "../guardrails" },
     { "path": "../cassette" },
     { "path": "../acttrace" }
   ]

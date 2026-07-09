@@ -7,3 +7,6 @@ coverage/
 .env
 .env.*
 .vitest/
+
+# transient pack artifact for the cendor-sdk-js temp guardrails override (dropped at release)
+*.tgz

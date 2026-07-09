@@ -595,6 +595,24 @@ export class AuditLog {
         used: e.used ?? null,
         decisions: jsonable(e.decisions),
       });
+    } else if (
+      event !== null &&
+      typeof event === 'object' &&
+      'guardrail' in event &&
+      'stage' in event &&
+      'action' in event
+    ) {
+      // @cendor/guardrails GuardrailDecision — duck-typed, no import (see contextkit branch above).
+      const e = event as Record<string, unknown>;
+      this._append('guardrail_decision', {
+        decision_id: did,
+        guardrail: e.guardrail,
+        stage: e.stage,
+        action: e.action,
+        reason: e.reason ?? '',
+        agent: e.agent ?? '',
+        tool: e.tool ?? '',
+      });
     }
   };
 

@@ -75,6 +75,12 @@ importers:
         specifier: ^1.2.1
         version: 1.2.1
 
+  packages/guardrails:
+    dependencies:
+      '@cendor/core':
+        specifier: workspace:^
+        version: link:../core
+
   packages/libs:
     dependencies:
       '@cendor/acttrace':
@@ -89,6 +95,9 @@ importers:
       '@cendor/core':
         specifier: workspace:^
         version: link:../core
+      '@cendor/guardrails':
+        specifier: workspace:^
+        version: link:../guardrails
       '@cendor/squeeze':
         specifier: workspace:^
         version: link:../squeeze

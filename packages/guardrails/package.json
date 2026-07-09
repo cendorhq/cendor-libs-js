@@ -1,7 +1,7 @@
 {
-  "name": "@cendor/libs",
-  "version": "0.2.5",
-  "description": "All seven Cendor libraries in one install — plain building blocks for LLM apps: context, cost, compression, a deterministic guardrails gate, testing, and a tamper-evident audit trail.",
+  "name": "@cendor/guardrails",
+  "version": "0.0.0",
+  "description": "A local-first gate for LLM apps: define a check — keyword, regex, URL, length, JSON-schema — attach it to a stage (input, tool call, tool output, output). Deterministic, microsecond, $0, and every decision is audit-grade evidence.",
   "type": "module",
   "license": "Apache-2.0",
   "main": "./dist/index.js",
@@ -23,26 +23,22 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@cendor/acttrace": "workspace:^",
-    "@cendor/cassette": "workspace:^",
-    "@cendor/contextkit": "workspace:^",
-    "@cendor/core": "workspace:^",
-    "@cendor/guardrails": "workspace:^",
-    "@cendor/squeeze": "workspace:^",
-    "@cendor/tokenguard": "workspace:^"
+    "@cendor/core": "workspace:^"
   },
   "keywords": [
     "llm",
-    "cendor",
-    "meta",
-    "umbrella"
+    "guardrails",
+    "safety",
+    "gate",
+    "governance",
+    "cendor"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cendorhq/cendor-libs-js.git",
-    "directory": "packages/libs"
+    "directory": "packages/guardrails"
   },
-  "homepage": "https://cendor.ai/docs",
+  "homepage": "https://cendor.ai/docs/guardrails",
   "bugs": {
     "url": "https://github.com/cendorhq/cendor-libs-js/issues"
   },

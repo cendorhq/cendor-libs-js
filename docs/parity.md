@@ -25,6 +25,7 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 | LangChain `CendorCallbackHandler` | ✅ | ✅ | `@cendor/core/langchain`; recording-only in both; reads `usage_metadata`, correlates by root-run `traceId` |
 | `trace()` correlation | ✅ contextvars | ✅ | AsyncLocalStorage-injectable; ambient fallback |
 | **tokenguard** budgets/track/report/sinks | ✅ | ✅ | `AsyncLocalStorage` scoping; SQLite/Queue/OTel sinks |
+| **guardrails** rules/stages/install | ✅ | ✅ | deterministic gate at 4 stages (input/tool_call/tool_output/output); block/redact/flag → `guardrail_decision` on the bus; `apply`/`evaluate` (+ async), `install()` interceptor; no `node:*` — all-runtime |
 | **contextkit** assemble/evict/order | ✅ | ✅ | single async `assemble()` (Py sync+async collapsed) |
 | **squeeze** compress/decompress | ✅ | ✅ | deterministic; sha256 handle ids match |
 | **cassette** record/replay | ✅ | ✅ | Python-recorded cassette replays in JS (vector-verified) |
@@ -40,6 +41,7 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 |---|---|---|---|
 | `@cendor/core` | ✅ | ✅ | 🚧 (types/bus/prices/tokens pure; `instrument` wraps fetch SDKs) |
 | `@cendor/contextkit`, `@cendor/squeeze` | ✅ | ✅ | ✅ pure compute |
+| `@cendor/guardrails` | ✅ | ✅ | ✅ pure deterministic compute (no `node:*`) |
 | `@cendor/tokenguard` | ✅ | ✅ | ⚠️ advisory only — enforcement is server-side |
 | `@cendor/cassette` | ✅ (fs) | ✅ (adapter) | ⚠️ memory/IndexedDB adapter |
 | `@cendor/acttrace` | ✅ | ✅ | ❌ never — signing keys can't live in a client |

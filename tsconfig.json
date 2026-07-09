@@ -7,6 +7,7 @@
     { "path": "packages/contextkit" },
     { "path": "packages/cassette" },
     { "path": "packages/acttrace" },
+    { "path": "packages/guardrails" },
     { "path": "packages/libs" }
   ]
 }
