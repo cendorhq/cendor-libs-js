@@ -409,3 +409,11 @@ function typeName(d: unknown): string {
   if (Array.isArray(d)) return 'array';
   return typeof d;
 }
+
+// --------------------------------------------------------------------------- detection-tier adapters
+//
+// The opt-in detection tier (local ML classifier / language detector / hosted moderation) lives in
+// `./adapters`, which reuses `payloadText` above. Re-exported here so `rules.classifier` /
+// `rules.language` / `rules.openaiModeration` work as one surface (like Python's `rules`). `adapters`
+// imports only `./decision` + `payloadText` (a hoisted function), so the cycle is runtime-safe.
+export { classifier, language, openaiModeration } from './adapters.js';

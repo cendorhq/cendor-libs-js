@@ -26,6 +26,7 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 | `trace()` correlation | ✅ contextvars | ✅ | AsyncLocalStorage-injectable; ambient fallback |
 | **tokenguard** budgets/track/report/sinks | ✅ | ✅ | `AsyncLocalStorage` scoping; SQLite/Queue/OTel sinks |
 | **guardrails** rules/stages/install/scoped | ✅ | ✅ | deterministic gate at 4 stages (input/tool_call/tool_output/output); block/redact/flag → `guardrail_decision` on the bus; `apply`/`evaluate` (+ async), `install()` interceptor, `scoped()` per-request gating, per-guardrail `timeout` (async-only in TS — no threads) + `on_error`, `judge` helpers; no hard `node:*` — all-runtime (`scoped` uses `AsyncLocalStorage` when present, else an ambient fallback) |
+| guardrails detection-tier adapters | ✅ `classifier` / `prompt_guard` / `language` / `openai_moderation` | ✅ `classifier` / `language` / `openaiModeration` | bring-your-own local classifier / `detect` callable / OpenAI client — no ML deps; re-exported as `rules.*` + `adapters.*`. **`prompt_guard` is Python-only** (needs `transformers`) — 🚧 in TS: wire an ONNX/transformers.js model through `rules.classifier`. `language` needs a BYO `detect` in TS (no bundled langid). No jailbreak-detection claim — see "Threat model". |
 | **contextkit** assemble/evict/order | ✅ | ✅ | single async `assemble()` (Py sync+async collapsed) |
 | **squeeze** compress/decompress | ✅ | ✅ | deterministic; sha256 handle ids match |
 | **cassette** record/replay | ✅ | ✅ | Python-recorded cassette replays in JS (vector-verified) |

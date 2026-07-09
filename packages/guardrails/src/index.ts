@@ -50,6 +50,7 @@ export type {
 } from './decision.js';
 export * as rules from './rules.js';
 export * as judge from './judge.js';
+export * as adapters from './adapters.js';
 
 /** The result of evaluating a stage: the (possibly redacted) payload plus the recorded decisions. */
 export interface EvalResult {
