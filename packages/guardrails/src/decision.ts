@@ -14,6 +14,17 @@ export type Stage = (typeof STAGES)[number];
 export const ACTIONS = ['block', 'redact', 'flag'] as const;
 export type Action = (typeof ACTIONS)[number];
 
+/**
+ * What to do when a check *itself* errors or times out (as opposed to returning a verdict).
+ * `fail_closed` treats the error as a block (fail-safe — the default for a gate you rely on);
+ * `fail_open` records the failure as a `flag` and lets the call proceed (so a flaky tier-3/4 judge
+ * outage degrades to advisory rather than silently disabling the agent). Either way the failure is
+ * emitted as a `GuardrailDecision`, so the audit chain records that the check could not run —
+ * evidence, not a swallowed exception.
+ */
+export const ON_ERROR = ['fail_closed', 'fail_open'] as const;
+export type OnError = (typeof ON_ERROR)[number];
+
 /** Coerce a stage spec (a single stage or a collection) to a validated array. */
 export function normalizeStages(stage: string | readonly string[]): string[] {
   const stages = typeof stage === 'string' ? [stage] : [...stage];
@@ -66,23 +77,65 @@ export interface Guardrail {
   name: string;
   stages: string[];
   check: Check;
+  /**
+   * Optional per-check wall-clock limit in **seconds**. Meant for slow tier-3/4 checks (an LLM
+   * judge, a hosted rail); deterministic built-ins run in microseconds and leave it `undefined`.
+   * Enforced on the **async** path only (`evaluateAsync`) — JS has no threads, so there is no true
+   * sync timeout (see `evaluate`). On the async path a coroutine check is bounded via
+   * `Promise.race`; on a throw/timeout the `onError` policy decides.
+   */
+  timeout?: number;
+  /**
+   * What to do when the check *throws* or *times out*: `"fail_closed"` (default — treat it as a
+   * block) or `"fail_open"` (record a `flag` and proceed). Rule factories pick the safe default for
+   * their action; set it explicitly for a bring-your-own judge so an outage degrades to advisory
+   * instead of a hard stop (or vice-versa).
+   */
+  onError?: OnError;
 }
 
 export interface DefineGuardrailOptions {
   stage?: string | readonly string[];
   name?: string;
+  /** Per-check wall-clock limit in seconds (async path only); positive or `undefined`. */
+  timeout?: number;
+  /** Error/timeout policy (default `"fail_closed"`). */
+  onError?: OnError;
+}
+
+/**
+ * Validate a guardrail's execution policy (mirrors Python's `Guardrail.__post_init__`). Throws on an
+ * unknown `onError` or a non-positive `timeout`.
+ */
+export function validateExecutionPolicy(timeout: number | undefined, onError: OnError): void {
+  if (!(ON_ERROR as readonly string[]).includes(onError)) {
+    throw new Error(
+      `unknown onError ${JSON.stringify(onError)}; must be one of ${ON_ERROR.join(', ')}`,
+    );
+  }
+  if (timeout !== undefined && !(timeout > 0)) {
+    throw new Error(
+      `timeout must be positive seconds or undefined, got ${JSON.stringify(timeout)}`,
+    );
+  }
 }
 
 /**
  * Turn a `check(payload, ctx)` function into a `Guardrail` (the TS analogue of Python's
- * `@guardrail` decorator — JS has no function decorators).
+ * `@guardrail` decorator — JS has no function decorators). `timeout` / `onError` set the per-check
+ * execution policy (see {@link Guardrail}).
  */
 export function defineGuardrail(check: Check, opts: DefineGuardrailOptions = {}): Guardrail {
-  return {
+  const onError: OnError = opts.onError ?? 'fail_closed';
+  validateExecutionPolicy(opts.timeout, onError);
+  const g: Guardrail = {
     name: opts.name ?? (check.name || 'guardrail'),
     stages: normalizeStages(opts.stage ?? 'input'),
     check,
+    onError,
   };
+  if (opts.timeout !== undefined) g.timeout = opts.timeout;
+  return g;
 }
 
 export interface GuardrailDecisionInit {

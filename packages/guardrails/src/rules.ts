@@ -8,7 +8,15 @@
  * adversarial attack — see docs/guardrails.md "Honest limits".
  */
 import { tokens } from '@cendor/core';
-import { type Check, type Context, type Guardrail, Verdict, normalizeStages } from './decision.js';
+import {
+  type Check,
+  type Context,
+  type Guardrail,
+  type OnError,
+  Verdict,
+  normalizeStages,
+  validateExecutionPolicy,
+} from './decision.js';
 
 type Message = Record<string, unknown>;
 type Stage = string | readonly string[];
@@ -74,8 +82,32 @@ function redactMessage(msg: Message, sub: (s: string) => string): Message {
   return out;
 }
 
-function mkGuardrail(name: string, stage: Stage, check: Check): Guardrail {
-  return { name, stages: normalizeStages(stage), check };
+function mkGuardrail(
+  name: string,
+  stage: Stage,
+  check: Check,
+  exec: { timeout?: number; onError?: OnError } = {},
+): Guardrail {
+  const g: Guardrail = { name, stages: normalizeStages(stage), check };
+  // Deterministic built-ins leave the execution policy unset (the engine defaults on_error to
+  // fail_closed); only `custom` / `llmJudge` attach a timeout / on_error.
+  if (exec.onError !== undefined || exec.timeout !== undefined) {
+    const onError = exec.onError ?? 'fail_closed';
+    validateExecutionPolicy(exec.timeout, onError);
+    g.onError = onError;
+    if (exec.timeout !== undefined) g.timeout = exec.timeout;
+  }
+  return g;
+}
+
+/**
+ * Default the error policy from a guardrail's action: a `block` gate fails **closed** (an errored
+ * check is treated as a block), while a `flag` degrades to advisory (`fail_open`). An explicit
+ * `onError` always wins.
+ */
+function resolveOnError(action: 'block' | 'redact' | 'flag', onError?: OnError): OnError {
+  if (onError !== undefined) return onError;
+  return action === 'flag' ? 'fail_open' : 'fail_closed';
 }
 
 // --------------------------------------------------------------------------- rules
@@ -271,17 +303,33 @@ export function jsonSchema(
 export interface CustomOptions {
   stage?: Stage;
   name?: string;
+  /** Per-check wall-clock limit in seconds (async path only). */
+  timeout?: number;
+  /** Error/timeout policy (default `"fail_closed"`). */
+  onError?: OnError;
 }
 
-/** Wrap any `fn(payload, ctx) -> Verdict | null` as a `Guardrail` (sync or async). */
+/**
+ * Wrap any `fn(payload, ctx) -> Verdict | null` as a `Guardrail` (sync or async). Your `fn` is
+ * arbitrary code, so it can throw or hang: `timeout` (seconds, async path) bounds it and `onError`
+ * (`"fail_closed"` default / `"fail_open"`) decides what a throw or timeout does — either way the
+ * failure is recorded as a decision.
+ */
 export function custom(fn: Check, opts: CustomOptions = {}): Guardrail {
-  return mkGuardrail(opts.name ?? (fn.name || 'custom'), opts.stage ?? 'input', fn);
+  return mkGuardrail(opts.name ?? (fn.name || 'custom'), opts.stage ?? 'input', fn, {
+    timeout: opts.timeout,
+    onError: opts.onError ?? 'fail_closed',
+  });
 }
 
 export interface LlmJudgeOptions {
   stage?: Stage;
   action?: 'block' | 'redact' | 'flag';
   name?: string;
+  /** Per-check wall-clock limit in seconds (async path only). */
+  timeout?: number;
+  /** Error/timeout policy; defaults from `action` (flag → `fail_open`, else `fail_closed`). */
+  onError?: OnError;
 }
 
 /**
@@ -299,7 +347,10 @@ export function llmJudge(
 ): Guardrail {
   const { stage = 'output', action = 'block', name = 'llm_judge' } = opts;
   const check: Check = async (payload, ctx) => coerce(await judge(payload, ctx), action);
-  return mkGuardrail(name, stage, check);
+  return mkGuardrail(name, stage, check, {
+    timeout: opts.timeout,
+    onError: resolveOnError(action, opts.onError),
+  });
 }
 
 function coerce(

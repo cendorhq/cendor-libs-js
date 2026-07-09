@@ -25,27 +25,31 @@ import {
   type Guardrail,
   GuardrailDecision,
   GuardrailTripped,
-  type Verdict,
+  Verdict,
 } from './decision.js';
 
 export {
   STAGES,
   ACTIONS,
+  ON_ERROR,
   Verdict,
   GuardrailDecision,
   GuardrailTripped,
   defineGuardrail,
   normalizeStages,
+  validateExecutionPolicy,
 } from './decision.js';
 export type {
   Stage,
   Action,
+  OnError,
   Context,
   Check,
   Guardrail,
   DefineGuardrailOptions,
 } from './decision.js';
 export * as rules from './rules.js';
+export * as judge from './judge.js';
 
 /** The result of evaluating a stage: the (possibly redacted) payload plus the recorded decisions. */
 export interface EvalResult {
@@ -92,10 +96,75 @@ function isPromise(x: unknown): x is Promise<unknown> {
   return x != null && typeof (x as { then?: unknown }).then === 'function';
 }
 
+const ERROR_REASON_MAX = 200;
+
+/** A timeout marker error — a check that outran its `timeout` on the async path. */
+class GuardrailTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TimeoutError';
+  }
+}
+
+/**
+ * Map a check error/timeout to a verdict per `g.onError`. Either way this becomes a
+ * `GuardrailDecision`, so the audit chain records that the check could not run — never a silently
+ * swallowed exception. The reason carries the error *name* + a truncated message, never the payload
+ * the check saw.
+ */
+function onErrorVerdict(g: Guardrail, exc: unknown): Verdict {
+  const name =
+    (exc as { name?: string })?.name ??
+    (exc as { constructor?: { name?: string } })?.constructor?.name ??
+    'Error';
+  const message = (exc as { message?: string })?.message ?? String(exc);
+  let detail = `${name}: ${message}`;
+  if (detail.length > ERROR_REASON_MAX) detail = `${detail.slice(0, ERROR_REASON_MAX)}…`;
+  if ((g.onError ?? 'fail_closed') === 'fail_open') {
+    return new Verdict('flag', `check errored (fail-open): ${detail}`);
+  }
+  return new Verdict('block', `check errored (fail-closed): ${detail}`);
+}
+
+/**
+ * Run one guardrail's check on the async path, bounding an `async` check to `g.timeout` via
+ * `Promise.race`. A *sync* check runs inline (a sync `timeout` cannot be enforced without threads —
+ * see {@link Guardrail}). Throws propagate to the caller's `onError` mapping.
+ */
+async function runCheckAsync(
+  g: Guardrail,
+  payload: unknown,
+  ctx: Context,
+): Promise<Verdict | null> {
+  const result = g.check(payload, ctx);
+  if (isPromise(result) && g.timeout !== undefined) {
+    const seconds = g.timeout;
+    let handle: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      handle = setTimeout(
+        () =>
+          reject(
+            new GuardrailTimeoutError(
+              `guardrail ${JSON.stringify(g.name)} check exceeded ${seconds}s`,
+            ),
+          ),
+        seconds * 1000,
+      );
+    });
+    try {
+      return (await Promise.race([result, timeout])) as Verdict | null;
+    } finally {
+      if (handle !== undefined) clearTimeout(handle);
+    }
+  }
+  return (await result) as Verdict | null;
+}
+
 /**
  * Run the `stage` guardrails over `payload` **synchronously**. Returns `{ payload, decisions }`
  * with any redactions applied in order; throws `GuardrailTripped` on the first block. An `async`
- * check throws here — use {@link evaluateAsync}.
+ * check throws here — use {@link evaluateAsync}. A *throwing* sync check honours its `onError`
+ * policy; `timeout` applies to the async path only (no sync threads in JS).
  */
 export function evaluate(
   guardrails: readonly Guardrail[],
@@ -107,17 +176,31 @@ export function evaluate(
   const decisions: GuardrailDecision[] = [];
   let current = payload;
   for (const g of applicable(guardrails, stage)) {
-    const verdict = g.check(current, context);
-    if (isPromise(verdict)) {
-      void verdict.catch(() => {}); // swallow the rejection of the discarded promise
+    let result: Verdict | null | Promise<Verdict | null>;
+    try {
+      result = g.check(current, context);
+    } catch (err) {
+      if (err instanceof GuardrailTripped) throw err;
+      // a THROWING sync check → its on_error policy (recorded), never a swallowed exception
+      current = handle(onErrorVerdict(g, err), g, stage, current, context, decisions);
+      continue;
+    }
+    // An async check on the sync path is a misuse: this TypeError is raised OUTSIDE the on_error
+    // try above so it always propagates (parity with Python `_invoke_sync`), never mapped to a block.
+    if (isPromise(result)) {
+      void result.catch(() => {}); // swallow the rejection of the discarded promise
       throw new TypeError(`guardrail ${JSON.stringify(g.name)} is async; use evaluateAsync`);
     }
-    current = handle(verdict, g, stage, current, context, decisions);
+    current = handle(result, g, stage, current, context, decisions);
   }
   return { payload: current, decisions };
 }
 
-/** Async counterpart of {@link evaluate}: awaits `async` checks, calls sync ones directly. */
+/**
+ * Async counterpart of {@link evaluate}: awaits `async` checks (bounded by each guardrail's
+ * `timeout`), calls sync ones directly, and applies each guardrail's `onError` policy on a
+ * throw/timeout.
+ */
 export async function evaluateAsync(
   guardrails: readonly Guardrail[],
   stage: string,
@@ -128,7 +211,15 @@ export async function evaluateAsync(
   const decisions: GuardrailDecision[] = [];
   let current = payload;
   for (const g of applicable(guardrails, stage)) {
-    const verdict = await g.check(current, context);
+    let verdict: Verdict | null;
+    try {
+      verdict = await runCheckAsync(g, current, context);
+    } catch (err) {
+      if (err instanceof GuardrailTripped) throw err; // a block from a nested handle propagates
+      verdict = onErrorVerdict(g, err); // throw / timeout → on_error policy (recorded)
+    }
+    // handle() throws GuardrailTripped on a block — OUTSIDE the try, so a block is never caught as
+    // an on_error (only the CHECK's own throws map to on_error).
     current = handle(verdict, g, stage, current, context, decisions);
   }
   return { payload: current, decisions };
@@ -160,45 +251,56 @@ let installedInterceptor: ((event: unknown) => unknown) | null = null;
 let installedSubscriber: ((event: unknown) => void) | null = null;
 
 /**
+ * The shared interceptor body used by {@link install} and {@link scoped} — gate an `LLMCall` at the
+ * `input` stage (redact reroutes, block raises, pass declines) and a `ToolCall` at the `tool_call`
+ * stage (block raises; redact/flag recorded but the call proceeds).
+ */
+function gateInterceptor(gl: readonly Guardrail[], event: unknown): unknown {
+  if (event instanceof LLMCall) {
+    const ctx: Context = { stage: 'input', traceId: event.traceId };
+    const { payload, decisions } = evaluate(gl, 'input', event.messages, ctx);
+    if (decisions.some((d) => d.action === 'redact')) return new Reroute({ messages: payload });
+    return MISS;
+  }
+  if (event instanceof ToolCall) {
+    const ctx: Context = {
+      stage: 'tool_call',
+      tool: event.name,
+      toolArgs: event.arguments,
+      traceId: event.traceId,
+    };
+    evaluate(gl, 'tool_call', event.arguments, ctx); // block throws; else record + proceed
+    return MISS;
+  }
+  return MISS;
+}
+
+/**
+ * The shared post-flight output subscriber body: gate the completed `LLMCall`'s response text at the
+ * `output` stage (block raises after the call ran).
+ */
+function gateOutput(gl: readonly Guardrail[], event: unknown): void {
+  if (!(event instanceof LLMCall)) return;
+  const text = responseText(event);
+  if (text === null) return;
+  const ctx: Context = { stage: 'output', traceId: event.traceId };
+  evaluate(gl, 'output', text, ctx); // block throws post-flight
+}
+
+/**
  * Gate every instrumented call by registering ONE `@cendor/core` interceptor (+ an output
  * subscriber). Framework-independent. Input: a block raises (nothing spends), a redact reroutes the
  * cleaned messages, a pass declines. tool_call: a block raises; else record + proceed (tools have
  * no message-rewrite seam). Output: a bus subscriber raises **post-flight** on a block (same
  * overshoot semantics as tokenguard's `onExceed:"raise"`). Runs sync checks only. Call
- * {@link uninstall} to remove.
+ * {@link uninstall} to remove. `install()` is **process-global** — for a concurrent server that
+ * varies guardrails per request, use {@link scoped} instead.
  */
 export function install(guardrails: readonly Guardrail[]): void {
   uninstall();
   const gl = [...guardrails];
-
-  const interceptor = (event: unknown): unknown => {
-    if (event instanceof LLMCall) {
-      const ctx: Context = { stage: 'input', traceId: event.traceId };
-      const { payload, decisions } = evaluate(gl, 'input', event.messages, ctx);
-      if (decisions.some((d) => d.action === 'redact')) return new Reroute({ messages: payload });
-      return MISS;
-    }
-    if (event instanceof ToolCall) {
-      const ctx: Context = {
-        stage: 'tool_call',
-        tool: event.name,
-        toolArgs: event.arguments,
-        traceId: event.traceId,
-      };
-      evaluate(gl, 'tool_call', event.arguments, ctx); // block throws; else record + proceed
-      return MISS;
-    }
-    return MISS;
-  };
-
-  const subscriber = (event: unknown): void => {
-    if (!(event instanceof LLMCall)) return;
-    const text = responseText(event);
-    if (text === null) return;
-    const ctx: Context = { stage: 'output', traceId: event.traceId };
-    evaluate(gl, 'output', text, ctx); // block throws post-flight
-  };
-
+  const interceptor = (event: unknown): unknown => gateInterceptor(gl, event);
+  const subscriber = (event: unknown): void => gateOutput(gl, event);
   addInterceptor(interceptor);
   bus.subscribe(subscriber);
   installedInterceptor = interceptor;
@@ -211,6 +313,109 @@ export function uninstall(): void {
   if (installedSubscriber) bus.unsubscribe(installedSubscriber);
   installedInterceptor = null;
   installedSubscriber = null;
+}
+
+// --------------------------------------------------------------------------- scoped (per-request)
+
+/** The minimal async-context store `scoped()` needs (Node's `AsyncLocalStorage` satisfies it). */
+interface ScopeStore {
+  getStore(): readonly Guardrail[] | undefined;
+  run<T>(gl: readonly Guardrail[], fn: () => T): T;
+}
+
+//: The guardrails active in *this* execution context, or `undefined` outside any `scoped` block.
+//: With a real `AsyncLocalStorage` installed (Node), overlapping async tasks each see their own
+//: value; the ambient fallback is single-context (documented — not concurrency-safe).
+let scopeStore: ScopeStore | undefined;
+let ambientScope: readonly Guardrail[] | undefined;
+let alsRequested = false;
+
+/**
+ * Lazily install a real `AsyncLocalStorage`-backed scope store (Node only), so overlapping async
+ * requests stay isolated. Best-effort + idempotent: on edge/browser (`node:async_hooks` missing) it
+ * quietly keeps the ambient fallback, so `@cendor/guardrails` stays all-runtime (no `node:*` at the
+ * module top). Mirrors the spirit of `@cendor/core`'s `installTraceContext`.
+ */
+async function ensureAls(): Promise<void> {
+  if (alsRequested) return;
+  alsRequested = true;
+  try {
+    const { AsyncLocalStorage } = await import('node:async_hooks');
+    if (!scopeStore) scopeStore = new AsyncLocalStorage<readonly Guardrail[]>();
+  } catch {
+    // node:async_hooks unavailable (edge/browser) — keep the ambient fallback (single-context)
+  }
+}
+void ensureAls(); // best-effort auto-install so real Node usage gets concurrency-correct isolation
+
+function activeScope(): readonly Guardrail[] | undefined {
+  return scopeStore ? scopeStore.getStore() : ambientScope;
+}
+
+function scopedInterceptor(event: unknown): unknown {
+  const gl = activeScope();
+  if (!gl || gl.length === 0) return MISS; // no active scope in this context — decline
+  return gateInterceptor(gl, event);
+}
+
+function scopedSubscriber(event: unknown): void {
+  const gl = activeScope();
+  if (!gl || gl.length === 0) return;
+  gateOutput(gl, event);
+}
+
+/**
+ * Register the context-gated interceptor + subscriber (idempotent — `addInterceptor` / `bus.subscribe`
+ * de-dupe). They stay registered and are no-ops outside a {@link scoped} block, so leaving them
+ * installed costs a store lookup per call and needs no teardown.
+ */
+function ensureScopedSeam(): void {
+  addInterceptor(scopedInterceptor);
+  bus.subscribe(scopedSubscriber);
+}
+
+/**
+ * Gate every instrumented call for the duration of `fn` — like {@link install}, but **scoped to the
+ * current execution context** rather than process-global. Runs `fn` with `guardrails` active and
+ * returns its result (sync or a `Promise`); the previous scope is restored on exit.
+ *
+ * With a real `AsyncLocalStorage` (auto-installed on Node), a concurrent server (async tasks) can
+ * vary guardrails per request without one request's set leaking into another. On edge/browser the
+ * fallback is a save/restore module variable — correct for sequential/nested use, **not**
+ * concurrency-safe. Nest freely — an inner `scoped` replaces the set for its block. Runs sync checks
+ * only (the seam is sync).
+ *
+ * ```ts
+ * await scoped([rules.keywordDeny(['secret'], { action: 'block' })], async () => {
+ *   await client.chat.completions.create(...); // gated here
+ * });
+ * ```
+ */
+export function scoped<T>(
+  guardrails: readonly Guardrail[],
+  fn: () => T | Promise<T>,
+): T | Promise<T> {
+  ensureScopedSeam();
+  void ensureAls();
+  const gl = [...guardrails];
+  if (scopeStore) return scopeStore.run(gl, fn);
+  // Ambient fallback (single-context): save/restore, honouring sync or async `fn` like core's trace.
+  const previous = ambientScope;
+  ambientScope = gl;
+  let result: T | Promise<T>;
+  try {
+    result = fn();
+  } catch (err) {
+    ambientScope = previous;
+    throw err;
+  }
+  if (result instanceof Promise) {
+    return result.finally(() => {
+      ambientScope = previous;
+    });
+  }
+  ambientScope = previous;
+  return result;
 }
 
 function get(obj: unknown, name: string): unknown {

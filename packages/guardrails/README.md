@@ -52,10 +52,21 @@ try {
 |---|---|
 | `rules.keywordDeny` / `regexRule` / `urlAllowlist` / `urlDeny` / `lengthBounds` / `jsonSchema` / `custom` | deterministic built-in rules (regex/arithmetic only) |
 | `rules.llmJudge` | adapter **contract** for a bring-your-own model judge — you supply the call |
+| `judge.verdictPrompt` / `parseVerdict` / `judge` | compose a model judge into a check: strict-JSON prompt + parse (malformed → `onError` decides) |
 | `apply` / `evaluate` (+ `applyAsync` / `evaluateAsync`) | gate a payload directly; `evaluate` also returns the redacted payload |
-| `install` / `uninstall` | register one `@cendor/core` interceptor + output subscriber |
-| `defineGuardrail(check, { stage })` | wrap a `(payload, ctx) => Verdict \| null` check into a `Guardrail` |
+| `install` / `uninstall` | register one `@cendor/core` interceptor + output subscriber (process-global) |
+| `scoped(guardrails, fn)` | like `install`, but **scoped to the current async context** — vary guardrails per request on a concurrent server (AsyncLocalStorage on Node; single-context fallback elsewhere) |
+| `defineGuardrail(check, { stage, timeout, onError })` | wrap a `(payload, ctx) => Verdict \| null` check into a `Guardrail` |
 | `Verdict` / `GuardrailDecision` / `GuardrailTripped` | trip vocabulary, bus event, fail-closed error |
+
+### Execution policy: `timeout` + `onError`
+
+`rules.custom` / `rules.llmJudge` (and `defineGuardrail`) take a per-check **`timeout`** (seconds,
+**async path only** — JS has no threads, so a sync timeout is a no-op) and an **`onError`** policy
+for when a check *throws or times out*: `"fail_closed"` (default — treat it as a `block`) or
+`"fail_open"` (record a `flag` and proceed). `llmJudge` defaults `onError` from its action
+(`flag → fail_open`, else `fail_closed`). Either way the failure is emitted as a `GuardrailDecision`
+(the reason carries the error type + message, never the payload) — evidence, not a swallowed error.
 
 ## Parity
 
