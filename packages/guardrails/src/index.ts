@@ -52,9 +52,12 @@ export * as rules from './rules.js';
 export * as judge from './judge.js';
 export * as adapters from './adapters.js';
 export * as semantic from './semantic.js';
+export * as redteam from './redteam.js';
 export { loadPolicy, POLICY_RULE_NAMES } from './policy.js';
 export type { LoadedPolicy, LoadPolicyOptions } from './policy.js';
 export type { Embed } from './semantic.js';
+export { loadCorpus, runRedteam, runRedteamAsync, RedTeamReport } from './redteam.js';
+export type { AttackCase, LoadCorpusOptions } from './redteam.js';
 
 /** The result of evaluating a stage: the (possibly redacted) payload plus the recorded decisions. */
 export interface EvalResult {
