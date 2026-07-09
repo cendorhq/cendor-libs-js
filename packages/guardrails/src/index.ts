@@ -51,6 +51,10 @@ export type {
 export * as rules from './rules.js';
 export * as judge from './judge.js';
 export * as adapters from './adapters.js';
+export * as semantic from './semantic.js';
+export { loadPolicy, POLICY_RULE_NAMES } from './policy.js';
+export type { LoadedPolicy, LoadPolicyOptions } from './policy.js';
+export type { Embed } from './semantic.js';
 
 /** The result of evaluating a stage: the (possibly redacted) payload plus the recorded decisions. */
 export interface EvalResult {
@@ -72,7 +76,9 @@ function emit(g: Guardrail, stage: string, verdict: Verdict, ctx: Context): Guar
     tool: ctx.tool ?? '',
     traceId: ctx.traceId || currentTraceId(),
     ts: new Date(),
-    metadata: { ...(ctx.metadata ?? {}) },
+    // the guardrail's static metadata (e.g. loadPolicy's policy_hash/version) is the base; the
+    // caller's per-call Context.metadata layers on top and wins any key clash.
+    metadata: { ...(g.metadata ?? {}), ...(ctx.metadata ?? {}) },
   });
   bus.emit(decision); // acttrace (if attached) chains this as a guardrail_decision entry
   return decision;

@@ -412,8 +412,17 @@ function typeName(d: unknown): string {
 
 // --------------------------------------------------------------------------- detection-tier adapters
 //
-// The opt-in detection tier (local ML classifier / language detector / hosted moderation) lives in
-// `./adapters`, which reuses `payloadText` above. Re-exported here so `rules.classifier` /
-// `rules.language` / `rules.openaiModeration` work as one surface (like Python's `rules`). `adapters`
-// imports only `./decision` + `payloadText` (a hoisted function), so the cycle is runtime-safe.
-export { classifier, language, openaiModeration } from './adapters.js';
+// The opt-in detection tier (local ML classifier / language detector / hosted moderation + the three
+// hosted rails) lives in `./adapters`, and the similarity checks (groundedness / deniedTopics) in
+// `./semantic` — each reuses `payloadText` above. Re-exported here so they read as `rules.classifier`
+// / `rules.bedrockGuardrail` / `rules.groundedness` etc. as one surface (like Python's `rules`). Both
+// import only `./decision` + `payloadText` (a hoisted function), so the cycle is runtime-safe.
+export {
+  classifier,
+  language,
+  openaiModeration,
+  bedrockGuardrail,
+  azureContentSafety,
+  modelArmor,
+} from './adapters.js';
+export { groundedness, deniedTopics } from './semantic.js';

@@ -612,6 +612,9 @@ export class AuditLog {
         reason: e.reason ?? '',
         agent: e.agent ?? '',
         tool: e.tool ?? '',
+        // metadata carries provenance the chain must record — e.g. loadPolicy's policy_hash /
+        // policy_version. Duck-typed + json-normalized; empty by default, so it stays compatible.
+        metadata: jsonable((e.metadata as unknown) ?? {}),
       });
     }
   };

@@ -47,6 +47,27 @@ describe('guardrail decision capture', () => {
     expect(verify(path)[0]).toBe(true);
   });
 
+  it('captures metadata for policy provenance', () => {
+    const path = tmpFile();
+    const log = new AuditLog('s', { path });
+    bus.emit(decision({ metadata: { policy_hash: 'sha256:abc', policy_version: '2026-07-09' } }));
+    log.detach();
+    const entry = log.entries.find((e) => e.type === 'guardrail_decision');
+    const md = (entry?.payload as Record<string, unknown>).metadata as Record<string, unknown>;
+    expect(md.policy_hash).toBe('sha256:abc');
+    expect(md.policy_version).toBe('2026-07-09');
+    expect(verify(path)[0]).toBe(true);
+  });
+
+  it('defaults metadata to {} when absent', () => {
+    const path = tmpFile();
+    const log = new AuditLog('s', { path });
+    bus.emit(decision());
+    log.detach();
+    const entry = log.entries.find((e) => e.type === 'guardrail_decision');
+    expect((entry?.payload as Record<string, unknown>).metadata).toEqual({});
+  });
+
   it('correlates with the active decision', async () => {
     const path = tmpFile();
     const log = new AuditLog('s', { path });

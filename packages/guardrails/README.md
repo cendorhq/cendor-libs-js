@@ -52,6 +52,10 @@ try {
 |---|---|
 | `rules.keywordDeny` / `regexRule` / `urlAllowlist` / `urlDeny` / `lengthBounds` / `jsonSchema` / `custom` | deterministic built-in rules (regex/arithmetic only) |
 | `rules.llmJudge` | adapter **contract** for a bring-your-own model judge — you supply the call |
+| `rules.classifier` / `language` / `openaiModeration` | opt-in detection-tier adapters (bring-your-own local classifier / `detect` / OpenAI client) |
+| `rules.bedrockGuardrail` / `azureContentSafety` / `modelArmor` | **hosted rails** (duck-typed cloud client, metered by the vendor) — a cloud verdict, a **local** `guardrail_decision` |
+| `rules.groundedness` / `deniedTopics` | similarity checks over a bring-your-own `embed(text)` fn — RAG-hallucination / off-topic gates, no bundled model |
+| `loadPolicy(source, { parse })` | build deterministic rules from a versioned JSON/YAML document; stamps `policyHash` / `policyVersion` onto every decision |
 | `judge.verdictPrompt` / `parseVerdict` / `judge` | compose a model judge into a check: strict-JSON prompt + parse (malformed → `onError` decides) |
 | `apply` / `evaluate` (+ `applyAsync` / `evaluateAsync`) | gate a payload directly; `evaluate` also returns the redacted payload |
 | `install` / `uninstall` | register one `@cendor/core` interceptor + output subscriber (process-global) |

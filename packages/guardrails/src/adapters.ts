@@ -2,12 +2,21 @@
  * Opt-in detection-tier adapters — beyond the deterministic tier-0 built-ins in `./rules`. The TS
  * port of `cendor.guardrails.adapters`.
  *
- * These reach past regex/arithmetic to a **local ML classifier**, a **language detector**, and a
- * **hosted moderation endpoint** (the detection tier of docs/guardrails.md "Threat model"). Each
- * rides a **bring-your-own** dependency or client — never a hard dependency of this package: a
- * classifier callable, a `detect` callable, or a provider client you pass in. They are re-exported
- * through `./rules` (`rules.classifier` / `rules.language` / `rules.openaiModeration`) and at the
- * package root (`import { adapters } from '@cendor/guardrails'`).
+ * These reach past regex/arithmetic to a **local ML classifier**, a **language detector**, a
+ * **hosted moderation endpoint**, and the three **hosted rails** (AWS Bedrock, Azure AI Content
+ * Safety, Google Model Armor) — the detection tier of docs/guardrails.md "Threat model". Each rides a
+ * **bring-your-own** dependency or client — never a hard dependency of this package: a classifier
+ * callable, a `detect` callable, or a provider client you pass in. They are re-exported through
+ * `./rules` (`rules.classifier` / `rules.language` / `rules.openaiModeration` /
+ * `rules.bedrockGuardrail` / `rules.azureContentSafety` / `rules.modelArmor`) and at the package root
+ * (`import { adapters } from '@cendor/guardrails'`).
+ *
+ * **Cloud check, local evidence.** The hosted rails call *your* cloud account (metered by the vendor
+ * — the base package stays local-first and free), but the verdict still runs through the same engine:
+ * every trip emits a local `GuardrailDecision` on the `@cendor/core` bus, so `@cendor/acttrace` chains
+ * it as tamper-evident evidence exactly like a deterministic rule. The reason records only which cloud
+ * policy fired — never the payload. The cloud clients are **duck-typed** (nothing here imports an AWS
+ * / Azure / Google SDK); construct the client and pass it in.
  *
  * **Honest claims.** There is **no jailbreak-detection claim** anywhere here. `classifier` is a
  * generic, license-agnostic contract around a local classifier *you* supply (a prompt-injection
@@ -251,4 +260,249 @@ export function openaiModeration(client: unknown, opts: OpenaiModerationOptions 
     return null;
   };
   return mk(check, { name, stage, action, timeout, onError });
+}
+
+// --------------------------------------------------------------------------- hosted rails
+//
+// Each calls *your* cloud account (metered — cite the vendor's pricing page in the docs) and turns the
+// vendor's verdict into a LOCAL GuardrailDecision → acttrace evidence: "cloud check, local evidence".
+// The clients are duck-typed (no AWS/Azure/Google import here); the JS cloud SDKs are async, so these
+// checks are async — use them via the SDK loop / evaluateAsync (the sync `install()` seam can't run them).
+
+function uniq(items: Iterable<string>): string[] {
+  const seen: string[] = [];
+  for (const x of items) if (x && !seen.includes(x)) seen.push(x);
+  return seen;
+}
+
+function getList(obj: unknown, name: string): unknown[] {
+  const v = get(obj, name);
+  return Array.isArray(v) ? v : [];
+}
+
+export interface BedrockGuardrailOptions {
+  guardrailVersion?: string;
+  /** Override the `INPUT`/`OUTPUT` source (else chosen from the stage). */
+  source?: 'INPUT' | 'OUTPUT';
+  stage?: Stage;
+  action?: Action;
+  name?: string;
+  timeout?: number;
+  onError?: OnError;
+}
+
+/**
+ * AWS Bedrock **`ApplyGuardrail`** as a guardrail — the flagship hosted rail: it evaluates any text
+ * against your pre-configured Bedrock guardrail **independently of any model**, so it works with any
+ * provider. `client` is duck-typed on `applyGuardrail(params) => Promise<resp>` (with aws-sdk v3, pass
+ * `{ applyGuardrail: (p) => client.send(new ApplyGuardrailCommand(p)) }`). `source` is chosen from the
+ * stage (`INPUT`/`OUTPUT`); `action: 'redact'` substitutes Bedrock's masked `outputs` text. Metered
+ * per text unit — set `timeout` / `onError`.
+ */
+export function bedrockGuardrail(
+  client: unknown,
+  guardrailId: string,
+  opts: BedrockGuardrailOptions = {},
+): Guardrail {
+  const { stage = 'input', action = 'block', name = 'bedrock_guardrail', timeout, onError } = opts;
+  const check: Check = async (payload, ctx) => {
+    const source =
+      opts.source ?? (ctx.stage === 'output' || ctx.stage === 'tool_output' ? 'OUTPUT' : 'INPUT');
+    const apply = get(client, 'applyGuardrail');
+    if (typeof apply !== 'function') {
+      throw new TypeError('bedrockGuardrail client has no applyGuardrail(params) method');
+    }
+    const resp = await (apply as (p: unknown) => unknown).call(client, {
+      guardrailIdentifier: guardrailId,
+      guardrailVersion: opts.guardrailVersion ?? 'DRAFT',
+      source,
+      content: [{ text: { text: payloadText(payload) } }],
+    });
+    if (get(resp, 'action') !== 'GUARDRAIL_INTERVENED') return null;
+    const reason = bedrockReason(resp);
+    if (action === 'redact') {
+      const masked = bedrockMasked(resp);
+      if (masked != null) return new Verdict('redact', reason, masked);
+    }
+    return new Verdict(action, reason);
+  };
+  return mk(check, { name, stage, action, timeout, onError });
+}
+
+function bedrockReason(resp: unknown): string {
+  const actionReason = get(resp, 'actionReason');
+  if (typeof actionReason === 'string' && actionReason) {
+    return `Bedrock guardrail intervened: ${actionReason}`;
+  }
+  const labels = bedrockAssessmentLabels(resp);
+  return `Bedrock guardrail intervened: ${labels.length ? labels.join(', ') : 'policy'}`;
+}
+
+function bedrockAssessmentLabels(resp: unknown): string[] {
+  const labels: string[] = [];
+  for (const a of getList(resp, 'assessments')) {
+    for (const t of getList(get(a, 'topicPolicy'), 'topics')) {
+      if (get(t, 'name')) labels.push(`topic:${get(t, 'name')}`);
+    }
+    for (const f of getList(get(a, 'contentPolicy'), 'filters')) {
+      if (get(f, 'type')) labels.push(`content:${get(f, 'type')}`);
+    }
+    const sp = get(a, 'sensitiveInformationPolicy');
+    for (const e of getList(sp, 'piiEntities')) {
+      if (get(e, 'type')) labels.push(`pii:${get(e, 'type')}`);
+    }
+    for (const r of getList(sp, 'regexes')) {
+      if (get(r, 'name')) labels.push(`regex:${get(r, 'name')}`);
+    }
+    const wp = get(a, 'wordPolicy');
+    if (getList(wp, 'customWords').length) labels.push('word:custom');
+    for (const m of getList(wp, 'managedWordLists')) {
+      if (get(m, 'type')) labels.push(`word:${get(m, 'type')}`);
+    }
+  }
+  return uniq(labels);
+}
+
+function bedrockMasked(resp: unknown): unknown {
+  for (const o of getList(resp, 'outputs')) {
+    const t = get(o, 'text');
+    if (typeof t === 'string' && t) return t;
+  }
+  return null;
+}
+
+export interface AzureContentSafetyOptions {
+  documents?: readonly string[];
+  stage?: Stage;
+  action?: Action;
+  name?: string;
+  timeout?: number;
+  onError?: OnError;
+}
+
+/**
+ * Azure AI Content Safety **Prompt Shields** as a guardrail — detects user-prompt/document
+ * injection & jailbreak attacks. `client` is duck-typed on
+ * `shieldPrompt({ userPrompt, documents }) => Promise<resp>` and trips when the response's
+ * `userPromptAnalysis.attackDetected` (or any `documentsAnalysis[].attackDetected`) is true — a binary
+ * signal, so `block` / `flag` are the meaningful actions. Metered per text record — set `timeout`.
+ */
+export function azureContentSafety(
+  client: unknown,
+  opts: AzureContentSafetyOptions = {},
+): Guardrail {
+  const {
+    stage = 'input',
+    action = 'block',
+    name = 'azure_content_safety',
+    timeout,
+    onError,
+  } = opts;
+  const documents = opts.documents ? [...opts.documents] : [];
+  const check: Check = async (payload, _ctx) => {
+    const shield = get(client, 'shieldPrompt');
+    if (typeof shield !== 'function') {
+      throw new TypeError('azureContentSafety client has no shieldPrompt(options) method');
+    }
+    const resp = await (shield as (o: unknown) => unknown).call(client, {
+      userPrompt: payloadText(payload),
+      documents,
+    });
+    const hits = azureAttacks(resp);
+    if (hits.length === 0) return null;
+    return new Verdict(action, `Azure Prompt Shields: attack detected (${hits.join(', ')})`);
+  };
+  return mk(check, { name, stage, action, timeout, onError });
+}
+
+function azureAttacks(resp: unknown): string[] {
+  const hits: string[] = [];
+  const upa = get(resp, 'userPromptAnalysis') ?? get(resp, 'user_prompt_analysis');
+  if (upa != null && (get(upa, 'attackDetected') || get(upa, 'attack_detected'))) {
+    hits.push('user prompt');
+  }
+  const da = get(resp, 'documentsAnalysis') ?? get(resp, 'documents_analysis');
+  if (Array.isArray(da)) {
+    da.forEach((d, i) => {
+      if (get(d, 'attackDetected') || get(d, 'attack_detected')) hits.push(`document[${i}]`);
+    });
+  }
+  return hits;
+}
+
+export interface ModelArmorOptions {
+  stage?: Stage;
+  action?: Action;
+  name?: string;
+  timeout?: number;
+  onError?: OnError;
+}
+
+/**
+ * Google Cloud **Model Armor** as a guardrail — screens prompts/responses against a template
+ * (prompt-injection & jailbreak, Sensitive Data Protection, malicious URIs, responsible-AI). `client`
+ * is duck-typed on `sanitizeUserPrompt(request)` / `sanitizeModelResponse(request)`; `template` is the
+ * full resource path `projects/{p}/locations/{l}/templates/{t}`. Trips when
+ * `sanitizationResult.filterMatchState` is `MATCH_FOUND`; the reason lists which filters matched.
+ * Metered per token — set `timeout`.
+ */
+export function modelArmor(
+  client: unknown,
+  template: string,
+  opts: ModelArmorOptions = {},
+): Guardrail {
+  const { stage = 'input', action = 'block', name = 'model_armor', timeout, onError } = opts;
+  const check: Check = async (payload, ctx) => {
+    const text = payloadText(payload);
+    const isOutput = ctx.stage === 'output' || ctx.stage === 'tool_output';
+    const method = get(client, isOutput ? 'sanitizeModelResponse' : 'sanitizeUserPrompt');
+    if (typeof method !== 'function') {
+      throw new TypeError('modelArmor client is missing sanitizeUserPrompt/sanitizeModelResponse');
+    }
+    const request = isOutput
+      ? { name: template, modelResponseData: { text } }
+      : { name: template, userPromptData: { text } };
+    const resp = await (method as (r: unknown) => unknown).call(client, request);
+    const matched = modelArmorMatches(resp);
+    if (matched.length === 0) return null;
+    return new Verdict(action, `Model Armor matched: ${matched.join(', ')}`);
+  };
+  return mk(check, { name, stage, action, timeout, onError });
+}
+
+const MATCH_FOUND = 'MATCH_FOUND';
+
+function matchFound(state: unknown): boolean {
+  const name =
+    (state as { name?: string })?.name ?? (typeof state === 'string' ? state : undefined);
+  return name === MATCH_FOUND; // "NO_MATCH_FOUND" !== "MATCH_FOUND"
+}
+
+function modelArmorMatches(resp: unknown): string[] {
+  const sr = get(resp, 'sanitizationResult') ?? get(resp, 'sanitization_result');
+  if (sr == null) return [];
+  const top = get(sr, 'filterMatchState') ?? get(sr, 'filter_match_state');
+  if (!matchFound(top)) return [];
+  const fr = get(sr, 'filterResults') ?? get(sr, 'filter_results');
+  if (fr == null) return ['filter'];
+  const entries =
+    fr instanceof Map
+      ? [...fr.entries()]
+      : typeof fr === 'object'
+        ? Object.entries(fr as Record<string, unknown>)
+        : [];
+  const matched = entries.filter(([, v]) => containsMatch(v)).map(([k]) => String(k));
+  return matched.length ? matched : ['filter'];
+}
+
+function containsMatch(val: unknown, depth = 0): boolean {
+  if (val == null || depth > 6) return false;
+  const st = get(val, 'match_state') ?? get(val, 'matchState');
+  if (st != null && matchFound(st)) return true;
+  if (Array.isArray(val)) return val.some((v) => containsMatch(v, depth + 1));
+  if (val instanceof Map) return [...val.values()].some((v) => containsMatch(v, depth + 1));
+  if (typeof val === 'object') {
+    return Object.values(val as Record<string, unknown>).some((v) => containsMatch(v, depth + 1));
+  }
+  return false;
 }

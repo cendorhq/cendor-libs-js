@@ -33,6 +33,22 @@ function collectDecisions(): GuardrailDecision[] {
   return out;
 }
 
+describe('guardrail metadata', () => {
+  it('merges static metadata onto the decision; ctx.metadata wins a clash', () => {
+    const out = collectDecisions();
+    const g = defineGuardrail(() => new Verdict('flag', 'hit'), {
+      stage: 'input',
+      name: 'tagged',
+      metadata: { severity: 'high', owner: 'sec' },
+    });
+    apply([g], 'input', 'x', { stage: 'input', metadata: { owner: 'override', req: 'r1' } });
+    const d = out.at(-1);
+    expect(d?.metadata.severity).toBe('high'); // from the guardrail's static metadata
+    expect(d?.metadata.req).toBe('r1'); // from the per-call context
+    expect(d?.metadata.owner).toBe('override'); // ctx.metadata wins the clash
+  });
+});
+
 function makeClient(
   calls: { n: number; lastKwargs?: Record<string, unknown> },
   response?: unknown,

@@ -92,6 +92,13 @@ export interface Guardrail {
    * instead of a hard stop (or vice-versa).
    */
   onError?: OnError;
+  /**
+   * Static key/values merged into every `GuardrailDecision` this guardrail emits (under the caller's
+   * per-call `Context.metadata`, which wins a key clash). `loadPolicy` uses it to stamp
+   * `policy_hash` / `policy_version` so the audit chain proves which policy was active; also handy
+   * for a severity, owner, or ticket id. Keep values small and payload-free.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 export interface DefineGuardrailOptions {
@@ -101,6 +108,8 @@ export interface DefineGuardrailOptions {
   timeout?: number;
   /** Error/timeout policy (default `"fail_closed"`). */
   onError?: OnError;
+  /** Static metadata merged into every decision this guardrail emits (see {@link Guardrail.metadata}). */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -135,6 +144,7 @@ export function defineGuardrail(check: Check, opts: DefineGuardrailOptions = {})
     onError,
   };
   if (opts.timeout !== undefined) g.timeout = opts.timeout;
+  if (opts.metadata !== undefined) g.metadata = opts.metadata;
   return g;
 }
 
