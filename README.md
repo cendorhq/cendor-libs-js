@@ -84,7 +84,7 @@ Read it top to bottom — that's one request's lifecycle, with each library labe
 Note that **tokenguard** and **acttrace** each appear twice: they run *before* the call (cap spend /
 guard the input) **and** *after* it (record cost / append to the log).
 
-## The six libraries — at a glance
+## The seven libraries — at a glance
 
 Each solves one production problem, and each works **on its own**:
 
@@ -93,14 +93,15 @@ Each solves one production problem, and each works **on its own**:
 | [**@cendor/contextkit**](packages/contextkit) | `cendor.contextkit` | prompts overflow | Pack prioritized blocks into a token budget, evict by rule, and get a receipt of what was kept, shrunk, or dropped. |
 | [**@cendor/squeeze**](packages/squeeze) | `cendor.squeeze` | a blob is too big | Content-aware, deterministic compression (JSON/logs/code/prose) — fully reversible, byte-for-byte. |
 | [**@cendor/tokenguard**](packages/tokenguard) | `cendor.tokenguard` | runaway cost | Cap spend before a call runs (block/downgrade), and attribute cost per feature/user. |
+| [**@cendor/guardrails**](packages/guardrails) | `cendor.guardrails` | unsafe in/out | A deterministic gate — block, redact, or flag by keyword/regex/URL/length/JSON-schema at four stages, before the model or a tool runs. |
 | [**@cendor/cassette**](packages/cassette) | `cendor.cassette` | can't test agents | Record a whole run once (LLM + tool calls), replay it forever — offline, deterministic. |
 | [**@cendor/acttrace**](packages/acttrace) | `cendor.acttrace` | no audit trail | Tamper-evident, offline-verifiable decision log + policy flags, with compliance evidence packs. |
 | [**@cendor/core**](packages/core) | `cendor.core` | the shared glue | Types, token counting, offline prices, the `instrument()` seam, and the event bus every tool rides. |
-| [**@cendor/libs**](packages/libs) | `cendor-libs` | one install | Umbrella meta-package — all six in a single dependency. |
+| [**@cendor/libs**](packages/libs) | `cendor-libs` | one install | Umbrella meta-package — all seven in a single dependency. |
 
 ```
-contextkit  →  squeeze  →  tokenguard  →  cassette  →  acttrace
- assemble       compress      budget         test         audit
+contextkit  →  squeeze  →  tokenguard  →  guardrails  →  cassette  →  acttrace
+ assemble       compress      budget          gate          test         audit
 ```
 
 All are **published on npm** and green in CI (offline tests · Biome · `tsc`).
@@ -126,7 +127,7 @@ See the [parity matrix](https://cendor.ai/docs/languages) for the full capabilit
 ## Install
 
 ```bash
-npm i @cendor/libs                       # the whole stack (all six)
+npm i @cendor/libs                       # the whole stack (all seven)
 npm i @cendor/core @cendor/tokenguard    # or just the pieces you need (core comes transitively)
 ```
 
