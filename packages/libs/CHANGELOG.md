@@ -1,5 +1,15 @@
 # @cendor/libs
 
+## 0.2.6
+
+### Patch Changes
+
+- 7679740: Add `@cendor/guardrails` to the umbrella — `@cendor/libs` now installs and re-exports the seventh library (`export * as guardrails`).
+- Updated dependencies [7679740]
+- Updated dependencies [7679740]
+  - @cendor/acttrace@0.5.0
+  - @cendor/guardrails@0.1.0
+
 ## 0.2.5
 
 ### Patch Changes
