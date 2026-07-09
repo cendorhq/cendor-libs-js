@@ -1,6 +1,6 @@
 {
   "name": "@cendor/acttrace",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "An automatic, tamper-evident log of your AI's decisions — every model and tool call is recorded and can be verified offline; change any past entry and the check fails.",
   "type": "module",
   "license": "Apache-2.0",

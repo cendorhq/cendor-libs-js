@@ -1,5 +1,15 @@
 # @cendor/libs
 
+## 0.2.7
+
+### Patch Changes
+
+- Updated dependencies [4d26329]
+- Updated dependencies [81ce71b]
+- Updated dependencies [4d26329]
+  - @cendor/acttrace@0.5.1
+  - @cendor/guardrails@0.2.0
+
 ## 0.2.6
 
 ### Patch Changes
