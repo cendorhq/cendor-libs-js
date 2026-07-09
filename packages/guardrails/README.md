@@ -50,7 +50,7 @@ try {
 
 | Export | What it does |
 |---|---|
-| `rules.keywordDeny` / `regexRule` / `urlAllowlist` / `urlDeny` / `lengthBounds` / `jsonSchema` / `custom` | deterministic built-in rules (regex/arithmetic only) |
+| `rules.keywordDeny` / `regexRule` / `spotlight` / `urlAllowlist` / `urlDeny` / `lengthBounds` / `jsonSchema` / `custom` | deterministic built-in rules (regex/arithmetic only); `spotlight` wraps untrusted content in a trust-lowering delimiter (a `$0` mitigation) |
 | `rules.llmJudge` | adapter **contract** for a bring-your-own model judge — you supply the call |
 | `rules.classifier` / `language` / `openaiModeration` | opt-in detection-tier adapters (bring-your-own local classifier / `detect` / OpenAI client) |
 | `rules.bedrockGuardrail` / `azureContentSafety` / `modelArmor` | **hosted rails** (duck-typed cloud client, metered by the vendor) — a cloud verdict, a **local** `guardrail_decision` |

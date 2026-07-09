@@ -70,6 +70,18 @@ function get(obj: unknown, name: string, dflt: unknown = undefined): unknown {
   return v === undefined ? dflt : v;
 }
 
+/**
+ * Build a `Verdict.metadata` dict from the **reserved annotation keys** (`severity` / `detected` /
+ * `filtered` / `redacted` / `citation` / `license` — documented in docs/specs/bus-events.md),
+ * dropping any that are `undefined`. Adapters use it so a vendor's detected/severity signal rides
+ * the decision's metadata into the acttrace chain — no shape change, no acttrace edit.
+ */
+function annotation(keys: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(keys)) if (v !== undefined) out[k] = v;
+  return out;
+}
+
 // --------------------------------------------------------------------------- classifier
 
 /** Normalise a classifier result (bool / number / `{label: score}`) to `[score, tripped]`. */
@@ -249,13 +261,16 @@ export function openaiModeration(client: unknown, opts: OpenaiModerationOptions 
     if (results.length === 0) return null;
     const result = results[0];
     const flagged = flaggedCategories(get(result, 'categories', {}));
+    const ann = annotation({ detected: true, filtered: action !== 'flag' });
     if (cats !== null) {
       const hit = flagged.filter((c) => cats.has(c.toLowerCase())).sort();
-      return hit.length > 0 ? new Verdict(action, `moderation flagged: ${hit.join(', ')}`) : null;
+      return hit.length > 0
+        ? new Verdict(action, `moderation flagged: ${hit.join(', ')}`, null, ann)
+        : null;
     }
     if (get(result, 'flagged', false)) {
       const names = flagged.join(', ') || 'policy';
-      return new Verdict(action, `moderation flagged: ${names}`);
+      return new Verdict(action, `moderation flagged: ${names}`, null, ann);
     }
     return null;
   };
@@ -322,9 +337,15 @@ export function bedrockGuardrail(
     const reason = bedrockReason(resp);
     if (action === 'redact') {
       const masked = bedrockMasked(resp);
-      if (masked != null) return new Verdict('redact', reason, masked);
+      if (masked != null) {
+        return new Verdict('redact', reason, masked, {
+          detected: true,
+          filtered: true,
+          redacted: true,
+        });
+      }
     }
-    return new Verdict(action, reason);
+    return new Verdict(action, reason, null, { detected: true, filtered: true });
   };
   return mk(check, { name, stage, action, timeout, onError });
 }
@@ -410,7 +431,12 @@ export function azureContentSafety(
     });
     const hits = azureAttacks(resp);
     if (hits.length === 0) return null;
-    return new Verdict(action, `Azure Prompt Shields: attack detected (${hits.join(', ')})`);
+    return new Verdict(
+      action,
+      `Azure Prompt Shields: attack detected (${hits.join(', ')})`,
+      null,
+      annotation({ detected: true, filtered: action !== 'flag' }),
+    );
   };
   return mk(check, { name, stage, action, timeout, onError });
 }
@@ -465,7 +491,12 @@ export function modelArmor(
     const resp = await (method as (r: unknown) => unknown).call(client, request);
     const matched = modelArmorMatches(resp);
     if (matched.length === 0) return null;
-    return new Verdict(action, `Model Armor matched: ${matched.join(', ')}`);
+    return new Verdict(
+      action,
+      `Model Armor matched: ${matched.join(', ')}`,
+      null,
+      annotation({ detected: true, filtered: action !== 'flag' }),
+    );
   };
   return mk(check, { name, stage, action, timeout, onError });
 }

@@ -41,13 +41,28 @@ export function normalizeStages(stage: string | readonly string[]): string[] {
  * What a check returns to *trip* a guardrail. Return `null` to pass.
  * `action`: `"block"` (fail-closed), `"redact"` (replace the payload with `replacement`), or
  * `"flag"` (record + continue). Keep `reason` free of raw secret values.
+ *
+ * `metadata` is a per-result annotation dict merged into this decision's
+ * {@link GuardrailDecision.metadata} — the channel a check uses to attach the **reserved annotation
+ * keys** (`severity` / `detected` / `filtered` / `redacted` / `citation` / `license`, documented in
+ * docs/specs/bus-events.md). Unlike the static `Guardrail.metadata` (constant per guardrail — e.g.
+ * `loadPolicy`'s `policy_hash`), this is computed per verdict, so a hosted-rail adapter can record
+ * the vendor's severity/labels for this specific check. `Verdict` is never serialized (only
+ * `GuardrailDecision` is), so this adds no wire change. Layered *under* the caller's per-call
+ * `Context.metadata` (context still wins a key clash) — see the engine's `emit`.
  */
 export class Verdict {
   readonly action: Action;
   readonly reason: string;
   readonly replacement: unknown;
+  readonly metadata: Record<string, unknown>;
 
-  constructor(action: Action, reason = '', replacement: unknown = null) {
+  constructor(
+    action: Action,
+    reason = '',
+    replacement: unknown = null,
+    metadata: Record<string, unknown> = {},
+  ) {
     if (!(ACTIONS as readonly string[]).includes(action)) {
       throw new Error(
         `unknown action ${JSON.stringify(action)}; must be one of ${ACTIONS.join(', ')}`,
@@ -56,6 +71,7 @@ export class Verdict {
     this.action = action;
     this.reason = reason;
     this.replacement = replacement;
+    this.metadata = metadata;
   }
 }
 
@@ -65,6 +81,12 @@ export interface Context {
   agent?: string;
   tool?: string;
   toolArgs?: unknown;
+  /**
+   * The user's originating instruction/intent for the run, when the caller knows it. An alignment
+   * check (`judge.taskAdherence`) compares a proposed tool call against it. Empty by default; a
+   * standalone check ignores it. (`@cendor/sdk` auto-threading is a deferred parity tail — 🚧.)
+   */
+  instruction?: string;
   traceId?: string;
   metadata?: Record<string, unknown>;
 }

@@ -79,9 +79,11 @@ function emit(g: Guardrail, stage: string, verdict: Verdict, ctx: Context): Guar
     tool: ctx.tool ?? '',
     traceId: ctx.traceId || currentTraceId(),
     ts: new Date(),
-    // the guardrail's static metadata (e.g. loadPolicy's policy_hash/version) is the base; the
-    // caller's per-call Context.metadata layers on top and wins any key clash.
-    metadata: { ...(g.metadata ?? {}), ...(ctx.metadata ?? {}) },
+    // Three metadata layers, lowest precedence first: the guardrail's static metadata (e.g.
+    // loadPolicy's policy_hash/version) is the base; the verdict's per-result annotations (the
+    // reserved severity/detected/… keys — see bus-events.md) layer over it; the caller's per-call
+    // Context.metadata is on top and still wins any key clash.
+    metadata: { ...(g.metadata ?? {}), ...(verdict.metadata ?? {}), ...(ctx.metadata ?? {}) },
   });
   bus.emit(decision); // acttrace (if attached) chains this as a guardrail_decision entry
   return decision;

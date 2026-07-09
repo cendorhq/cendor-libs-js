@@ -180,6 +180,71 @@ export function regexRule(pattern: RegExp | string, opts: RegexRuleOptions = {})
   });
 }
 
+// --------------------------------------------------------------------------- spotlight
+
+/** UTF-8 → base-64, all-runtime (btoa + TextEncoder; no `node:*` / Buffer). */
+function base64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+/**
+ * Derive the (opening, closing) wrapper from `delimiter`. A tag-shaped delimiter (`"<untrusted>"`)
+ * yields a matching close tag (`"</untrusted>"`); any other string is used verbatim on both sides.
+ */
+function spotlightDelimiters(delimiter: string): [string, string] {
+  const d = delimiter.trim();
+  if (d.startsWith('<') && d.endsWith('>') && !d.startsWith('</')) {
+    const tag = d.slice(1, -1).trim();
+    if (tag) return [`<${tag}>`, `</${tag}>`];
+  }
+  return [delimiter, delimiter];
+}
+
+function spotlightWrap(text: string, delimiter: string, encode: boolean): string {
+  if (!text.trim()) return text; // nothing to wrap
+  const body = encode ? base64(text) : text;
+  const [open, close] = spotlightDelimiters(delimiter);
+  return `${open}\n${body}\n${close}`;
+}
+
+export interface SpotlightOptions {
+  stage?: Stage;
+  delimiter?: string;
+  encode?: boolean;
+  name?: string;
+}
+
+/**
+ * Wrap untrusted content in a trust-lowering delimiter — a deterministic, `$0`, offline
+ * **mitigation** (not a detector), inspired by Azure Foundry's *Spotlighting*.
+ *
+ * The check **always** returns a `redact` verdict — it never blocks; it rewrites the payload,
+ * wrapping each scannable text field in `delimiter` (a tag like `"<untrusted>"` gets a matching
+ * `"</untrusted>"` close; any other string is used on both sides) so the model treats that span as
+ * lower-trust data, not instructions. With `encode:true` the wrapped body is base-64-encoded
+ * (mirroring Azure). Payload shape (string / message array / object) is preserved, so it composes
+ * with the rules that follow it and with a BYO judge. Most useful at `tool_output` (retrieved docs,
+ * tool results, emails — the indirect-injection surface).
+ *
+ * **Honest limits (from Azure's own page):** a mitigation, not detection; `encode:true` inflates
+ * token count (higher model cost, possible context-limit hits). `encode` defaults **off**.
+ */
+export function spotlight(opts: SpotlightOptions = {}): Guardrail {
+  const {
+    stage = ['input', 'tool_output'],
+    delimiter = '<untrusted>',
+    encode = false,
+    name = 'spotlight',
+  } = opts;
+  return mkGuardrail(name, stage, (payload) => {
+    const wrapped = redactPayload(payload, (s) => spotlightWrap(s, delimiter, encode));
+    return new Verdict('redact', 'spotlighted untrusted content', wrapped, { redacted: true });
+  });
+}
+
 const URL_RE = /https?:\/\/[^\s<>)\]}"']+/gi;
 
 function* iterHosts(text: string): Generator<string> {
