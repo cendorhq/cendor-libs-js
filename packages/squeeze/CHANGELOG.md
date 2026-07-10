@@ -1,5 +1,17 @@
 # @cendor/squeeze
 
+## 0.2.6
+
+### Patch Changes
+
+- d20450e: Deep-QA fixes.
+
+  - Budgeted JSON compression recurses into a payload nested under a single key (`{"data":[…]}`, `{"results":{…}}`), peeling elements/keys largest-first, instead of collapsing the whole thing to `{}` — so `contextkit`'s `Block(evict="compress")` keeps real content under a budget. Output stays valid JSON; `expand()` is still byte-exact (H1).
+  - A non-JSON-serializable input (bigint / function / symbol) now throws a clear `compress()` error instead of silently producing garbage (L4).
+
+- Updated dependencies [d20450e]
+  - @cendor/core@0.5.0
+
 ## 0.2.5
 
 ### Patch Changes

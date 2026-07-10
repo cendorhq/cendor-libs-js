@@ -1,5 +1,13 @@
 # @cendor/cassette
 
+## 0.2.6
+
+### Patch Changes
+
+- d20450e: Docs/typing: `localEmbeddingScorer` is now clearly documented as **Python-only — always throws** in JS (there is no maintained model2vec JS port). The symbol exists only so the name is discoverable and the failure is an immediate, clear error, not a working scorer; wire your own embedder via `embeddingScorer` (L9).
+- Updated dependencies [d20450e]
+  - @cendor/core@0.5.0
+
 ## 0.2.5
 
 ### Patch Changes

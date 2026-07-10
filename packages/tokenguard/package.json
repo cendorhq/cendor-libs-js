@@ -1,6 +1,6 @@
 {
   "name": "@cendor/tokenguard",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Spending limits for LLM calls: stop a call before it runs if it would blow the budget, and see cost broken down per feature.",
   "type": "module",
   "license": "Apache-2.0",

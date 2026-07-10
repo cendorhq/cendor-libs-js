@@ -1,5 +1,13 @@
 # @cendor/contextkit
 
+## 1.0.6
+
+### Patch Changes
+
+- d20450e: Deep-QA fix: an empty history `Block({ messages: [] })` no longer reports the misleading `history: dropped all 0 turns (no room)` — it is recorded as `kept` with no note, even with a large budget (L5).
+- Updated dependencies [d20450e]
+  - @cendor/core@0.5.0
+
 ## 1.0.5
 
 ### Patch Changes

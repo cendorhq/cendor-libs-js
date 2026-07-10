@@ -1,5 +1,23 @@
 # @cendor/libs
 
+## 0.2.11
+
+### Patch Changes
+
+- Updated dependencies [d20450e]
+- Updated dependencies [d20450e]
+- Updated dependencies [d20450e]
+- Updated dependencies [d20450e]
+- Updated dependencies [d20450e]
+- Updated dependencies [d20450e]
+  - @cendor/cassette@0.2.6
+  - @cendor/contextkit@1.0.6
+  - @cendor/core@0.5.0
+  - @cendor/guardrails@0.6.0
+  - @cendor/squeeze@0.2.6
+  - @cendor/tokenguard@0.2.6
+  - @cendor/acttrace@0.5.2
+
 ## 0.2.10
 
 ### Patch Changes
