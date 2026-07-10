@@ -9,6 +9,8 @@ order. It cooperates through `@cendor/core` — it never patches a client itself
 subscribing to the bus, and **replays** by registering a pre-call interceptor that returns the
 recorded response by request hash before the real call runs.
 
+Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Python) wires it up — or point it at [cendor.ai/docs/for-ai-assistants](https://cendor.ai/docs/for-ai-assistants).
+
 ## Killer example
 
 ```ts

@@ -19,6 +19,8 @@ preserved, `prev_hash` text-prepended, `GENESIS` = 64 zeros).
 > compliant with any framework). The control-ID annotations from `log.export(path, framework)` map
 > entries to a framework's articles; the assessment itself is always yours.
 
+Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Python) wires it up — or point it at [cendor.ai/docs/for-ai-assistants](https://cendor.ai/docs/for-ai-assistants).
+
 ## Killer example
 
 ```ts

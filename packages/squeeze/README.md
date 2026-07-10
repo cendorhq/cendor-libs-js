@@ -7,6 +7,8 @@ Shrink long prompts to hit a token budget and expand them back exactly — the s
 The TypeScript port of [`cendor-squeeze`](https://github.com/cendorhq/cendor-libs). Satisfies
 `@cendor/core`'s `Compressor` protocol by shape, so context tooling can use it without importing it.
 
+Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Python) wires it up — or point it at [cendor.ai/docs/for-ai-assistants](https://cendor.ai/docs/for-ai-assistants).
+
 ```ts
 import { compress, decompress } from '@cendor/squeeze';
 

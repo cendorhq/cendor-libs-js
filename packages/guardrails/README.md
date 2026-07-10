@@ -16,6 +16,8 @@ it as a `guardrail_decision` entry with **no import** between the two. Imports o
 > bring-your-own model judge (`rules.llmJudge`) for open-ended risk. No jailbreak-detection or
 > PII-catch-rate claims are made here.
 
+Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Python) wires it up — or point it at [cendor.ai/docs/for-ai-assistants](https://cendor.ai/docs/for-ai-assistants).
+
 ## Killer example
 
 ```ts

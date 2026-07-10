@@ -10,6 +10,8 @@ npm i @cendor/core
 npm i openai @anthropic-ai/sdk
 ```
 
+Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Python) wires it up — or point it at [cendor.ai/docs/for-ai-assistants](https://cendor.ai/docs/for-ai-assistants).
+
 ## Killer example — wrap once, get cost + tokens on every call
 
 ```ts

@@ -13,6 +13,8 @@ The receipt is honest at the **message** level: budgeting charges the per-messag
 providers add around every turn (self-calibrated from `core.tokens`), so `report().used` equals
 `tokens.count(await ctx.assemble(), model)` for text content — what the model actually sees.
 
+Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Python) wires it up — or point it at [cendor.ai/docs/for-ai-assistants](https://cendor.ai/docs/for-ai-assistants).
+
 ## Killer example
 
 ```ts

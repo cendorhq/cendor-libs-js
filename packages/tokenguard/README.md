@@ -9,6 +9,8 @@ never patches a client itself (the locked architecture: one `instrument()`, many
 client is instrumented, `withBudget(...)` / `budget(...)` enforce a cap and `track(...)` attributes
 spend by tags, with zero per-call wiring.
 
+Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Python) wires it up — or point it at [cendor.ai/docs/for-ai-assistants](https://cendor.ai/docs/for-ai-assistants).
+
 ## Killer example
 
 ```ts
