@@ -84,6 +84,14 @@ function makeBlockException(onBlock: OnBlock, findings: Finding[]): Error {
  *
  * Note that `Policy.default()` never blocks — use `Policy.gdpr()` / `pci()` / `strict()` (or a custom
  * policy) to make a category `block`. `audit` is optional — without it the guard still enforces.
+ *
+ * @example
+ * ```ts
+ * import { addInterceptor } from '@cendor/core';
+ * import { guard, Policy, AuditLog } from '@cendor/acttrace';
+ * const audit = new AuditLog('support');
+ * addInterceptor(guard(Policy.gdpr(), audit));
+ * ```
  */
 export function guard(
   policy?: Policy | null,

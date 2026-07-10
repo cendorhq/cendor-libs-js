@@ -26,6 +26,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Typecheck + build
         run: pnpm build
+      - name: Type Teach regression (decoy overloads still error)
+        run: pnpm check:types
       - name: Lint
         run: pnpm lint
       - name: Test (no network — committed conformance vectors)

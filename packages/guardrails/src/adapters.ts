@@ -128,6 +128,12 @@ export interface ClassifierOptions {
  * `true`). Bring **any** local classifier — an ONNX model, a transformers.js pipeline, a heuristic,
  * or a prompt-injection classifier (PromptGuard-class). A remote classifier can hang, so set
  * `timeout` / `onError` for it. No jailbreak-detection claim — see the module "Threat model" note.
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.classifier(classify, { threshold: 0.8, action: 'block' });
+ * ```
  */
 export function classifier(
   classify: (text: string) => number | boolean | Record<string, number>,
@@ -174,6 +180,12 @@ export interface LanguageOptions {
  * control the input distribution. Footgun of `action: 'block'`: with no `detect` the check throws,
  * and a blocking guardrail's `onError` defaults to fail-closed, so *every* call would be blocked;
  * wire `detect` before switching to `block`.
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.language(['en'], { detect: (text) => classify(text) });
+ * ```
  */
 export function language(allowed: Iterable<string>, opts: LanguageOptions = {}): Guardrail {
   const { detect, stage = 'input', action = 'flag', name = 'language', timeout, onError } = opts;
@@ -239,6 +251,12 @@ export interface OpenaiModerationOptions {
  * network call — bound it with `timeout` and pick an `onError` policy (fail-closed by default for a
  * block gate). This library stores nothing; the request goes to OpenAI. The client/response are
  * duck-typed, so any OpenAI-shaped client works.
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.openaiModeration(client, { categories: ['violence', 'hate'] });
+ * ```
  */
 export function openaiModeration(client: unknown, opts: OpenaiModerationOptions = {}): Guardrail {
   const {
@@ -315,6 +333,12 @@ export interface BedrockGuardrailOptions {
  * `{ applyGuardrail: (p) => client.send(new ApplyGuardrailCommand(p)) }`). `source` is chosen from the
  * stage (`INPUT`/`OUTPUT`); `action: 'redact'` substitutes Bedrock's masked `outputs` text. Metered
  * per text unit — set `timeout` / `onError`.
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.bedrockGuardrail(bedrock, 'gr-abc123', { action: 'block' });
+ * ```
  */
 export function bedrockGuardrail(
   client: unknown,
@@ -426,6 +450,12 @@ export interface AzureContentSafetyOptions {
  *
  * Metered per text record — set `timeout`. *(Groundedness-as-a-service is a planned follow-up — its
  * preview API needs the grounding sources plumbed in; use the local `rules.groundedness` meanwhile.)*
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.azureContentSafety(azureClient, { checks: ['prompt_shields'] });
+ * ```
  */
 export function azureContentSafety(
   client: unknown,
@@ -562,6 +592,12 @@ export interface ModelArmorOptions {
  * full resource path `projects/{p}/locations/{l}/templates/{t}`. Trips when
  * `sanitizationResult.filterMatchState` is `MATCH_FOUND`; the reason lists which filters matched.
  * Metered per token — set `timeout`.
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.modelArmor(armorClient, 'projects/p/locations/l/templates/t');
+ * ```
  */
 export function modelArmor(
   client: unknown,

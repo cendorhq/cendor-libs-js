@@ -385,7 +385,15 @@ export interface AuditLogOptions {
   storage?: ChainStorage;
 }
 
-/** A hash-chained, append-only, auto-populating audit log. */
+/**
+ * A hash-chained, append-only, auto-populating audit log.
+ *
+ * @example
+ * ```ts
+ * import { AuditLog } from '@cendor/acttrace';
+ * const audit = new AuditLog('support', { riskTier: 'limited' });
+ * ```
+ */
 export class AuditLog {
   readonly system: string;
   readonly riskTier: string;
@@ -711,7 +719,17 @@ export class AuditLog {
     };
   }
 
-  /** Write the chain as a JSONL evidence pack, optionally annotated with framework control IDs. */
+  /**
+   * Write the chain as a JSONL evidence pack, optionally annotated with framework control IDs.
+   * Valid frameworks: `eu_ai_act` | `gdpr` | `iso_42001` | `nist_rmf`.
+   *
+   * @example
+   * ```ts
+   * import { AuditLog } from '@cendor/acttrace';
+   * const audit = new AuditLog('support');
+   * audit.export('evidence.jsonl', 'eu_ai_act');
+   * ```
+   */
   export(path: string, framework: string | null = null): void {
     if (framework && !(framework in CONTROLS)) {
       throw new ValueError(
@@ -806,6 +824,12 @@ function errMessage(e: unknown): string {
 /**
  * Re-walk the hash chain in a JSONL file. Returns `[ok, detail]`. Detects edits and deletions,
  * including tail-truncation. Never throws on a missing/corrupt file — returns `[false, detail]`.
+ *
+ * @example
+ * ```ts
+ * import { verify } from '@cendor/acttrace';
+ * const [ok, detail] = verify('evidence.jsonl');
+ * ```
  */
 export function verify(path: string, opts: VerifyOptions = {}): [boolean, string] {
   const key = opts.key ?? null;

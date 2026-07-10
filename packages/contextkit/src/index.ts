@@ -84,6 +84,12 @@ let _defaultCompressor: unknown = null;
  * `(text, opts) => [small, handle]` callable — so you can plug in an alternative backend without
  * touching call sites. Pass `null` to clear (falls back to auto-discovering `@cendor/squeeze`). A
  * per-`Context` `compressor` option still overrides this default.
+ *
+ * @example
+ * ```ts
+ * import { useCompressor } from '@cendor/contextkit';
+ * useCompressor((text: string) => [text, null]);   // plug a `(text, opts) => [small, handle]` backend
+ * ```
  */
 export function useCompressor(compressor: unknown): unknown {
   const previous = _defaultCompressor;
@@ -159,6 +165,13 @@ export interface BlockOpts {
  *
  * Construct positionally with the content first (`new Block('hi', { priority: 5, role: 'system' })`)
  * or via an options object for `messages` blocks (`new Block({ messages: [...], priority: 5 })`).
+ *
+ * @example
+ * ```ts
+ * import { Block } from '@cendor/contextkit';
+ * ctx.add(new Block(SYSTEM_PROMPT, { priority: 10, pin: true, role: 'system' }));
+ * // note: an { evict: 'compress' } block additionally needs @cendor/squeeze installed
+ * ```
  */
 export class Block {
   content: Content | null;
@@ -325,6 +338,16 @@ export interface ContextOpts {
   imageTokens?: number | ((part: Part) => number);
 }
 
+/**
+ * A token-budgeted context assembler: construct with a budget + model, {@link Context.add} blocks,
+ * then `await` {@link Context.assemble}. See {@link ContextOpts} for `order` and the other options.
+ *
+ * @example
+ * ```ts
+ * import { Context } from '@cendor/contextkit';
+ * const ctx = new Context({ budgetTokens: 8000, model: 'gpt-4o', reserveOutput: 1000 });
+ * ```
+ */
 export class Context {
   budgetTokens: number;
   model: string;
@@ -367,6 +390,13 @@ export class Context {
    *
    * Deterministic: stable sort by `(pinned, priority, insertion order)`. Awaits summarizers and the
    * compressor, then emits the {@link AssemblyReport} onto core's bus.
+   *
+   * @example
+   * ```ts
+   * import { Context } from '@cendor/contextkit';
+   * const ctx = new Context({ budgetTokens: 8000, model: 'gpt-4o' });
+   * const messages = await ctx.assemble();   // async in TS (Python: sync assemble() + async aassemble())
+   * ```
    */
   async assemble(): Promise<Msg[]> {
     const [messages, report] = await this.pack(this.budgetTokens, true);

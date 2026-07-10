@@ -33,7 +33,17 @@ export class Reroute {
 type Interceptor = (event: unknown) => unknown;
 const interceptors: Interceptor[] = [];
 
-/** Register a pre-call interceptor. Returns a response to short-circuit, or {@link MISS} to proceed. */
+/**
+ * Register a pre-call interceptor. Returns a response to short-circuit, or {@link MISS} to proceed.
+ * Top-level on `@cendor/core` — **not** on `bus` (`bus` only has `subscribe`/`unsubscribe`/`emit`).
+ * Return a {@link Reroute} to rewrite the outgoing request before it is sent.
+ *
+ * @example
+ * ```ts
+ * import { addInterceptor, MISS } from '@cendor/core';
+ * addInterceptor((call) => MISS);   // inspect every call; MISS lets it proceed unchanged
+ * ```
+ */
 export function addInterceptor(fn: Interceptor): Interceptor {
   if (!interceptors.includes(fn)) interceptors.push(fn);
   return fn;
@@ -137,6 +147,14 @@ const MESSAGES_KWARG: Record<string, string> = { openai_responses: 'input', goog
 /**
  * Wrap a provider client so each call emits an `LLMCall` on the bus. Detection is structural. Unknown
  * clients are returned untouched; wrapping is idempotent and returns the same client object.
+ *
+ * Wrap the client **once**, at construction — not per request.
+ *
+ * @example
+ * ```ts
+ * import { instrument } from '@cendor/core';
+ * const client = instrument(new OpenAI());   // every call now emits an LLMCall; sync/async/stream
+ * ```
  */
 export function instrument<T>(client: T): T {
   for (const [owner, attr, provider] of findTargets(client)) {

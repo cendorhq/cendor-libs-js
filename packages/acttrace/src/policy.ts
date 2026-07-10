@@ -21,6 +21,12 @@ const SCRUB_ACTIONS: ReadonlySet<string> = new Set(['redact', 'block']);
  * Maps each detected category → an action, with a fallthrough `default`. Keys in `actions` may be a
  * specific **category** (`"credit_card"`) or a **group** (`"financial"`); a category-specific entry
  * wins over its group, which wins over `default`.
+ *
+ * @example
+ * ```ts
+ * import { Policy } from '@cendor/acttrace';
+ * const policy = Policy.gdpr();   // presets: default() · gdpr() · pci() · strict()
+ * ```
  */
 export class Policy {
   actions: Record<string, string>;
@@ -107,6 +113,12 @@ export class Finding {
 /**
  * Detect sensitive data in `obj` (str/dict/list) and resolve each category to an action. Returns one
  * {@link Finding} per detected category, sorted by category. Reports **counts only**.
+ *
+ * @example
+ * ```ts
+ * import { scan, Policy } from '@cendor/acttrace';
+ * const findings = scan('email me at a@b.com', Policy.gdpr());
+ * ```
  */
 export function scan(obj: unknown, policy?: Policy | null): Finding[] {
   const p = policy ?? Policy.default();
@@ -122,6 +134,12 @@ export function scan(obj: unknown, policy?: Policy | null): Finding[] {
 /**
  * Scrub `obj` per `policy` and return `[cleaned, findings]`. Only categories whose resolved action is
  * `redact` or `block` are scrubbed; `flag`/`allow` categories are reported but left in place.
+ *
+ * @example
+ * ```ts
+ * import { redact, Policy } from '@cendor/acttrace';
+ * const [cleaned, findings] = redact('my card is 4111 1111 1111 1111', Policy.pci());
+ * ```
  */
 export function redact<T>(obj: T, policy?: Policy | null): [T, Finding[]] {
   const findings = scan(obj, policy);

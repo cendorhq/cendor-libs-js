@@ -530,14 +530,31 @@ export class BudgetHandle {
 }
 
 /**
+ * @deprecated `budget` is curried — write `budget(cfg)(fn)`, or use `withBudget(cfg, cb)` for a
+ * callback scope. This two-argument overload exists only to make the wrong shape a compile error.
+ */
+export function budget(cfg: BudgetConfig, fn: never): never;
+/**
  * Cap spend on a decorated function (the parity of Python's `@budget(...)`). Validates its
  * configuration eagerly (throws on a missing cap / unknown `onExceed` / bad `downgrade` or
  * `clamp`), then returns a wrapper that opens a fresh budget frame per invocation.
  *
- * The TS core is async-first, so the returned wrapper is always async (model calls are async);
- * on `onExceed: 'truncate'` it resolves to `undefined` (graceful degradation).
+ * **Curried:** `budget(cfg)(fn)` — never `budget(cfg, fn)`. For a callback scope use
+ * `withBudget(cfg, cb)`. The TS core is async-first, so the returned wrapper is always async (model
+ * calls are async); on `onExceed: 'truncate'` it resolves to `undefined` (graceful degradation).
+ *
+ * @example
+ * ```ts
+ * import { budget } from '@cendor/tokenguard';
+ * const answer = budget({ usd: 0.5, onExceed: 'raise' })(async (q: string) => respond(q));
+ * ```
  */
-export function budget(cfg: BudgetConfig) {
+export function budget(
+  cfg: BudgetConfig,
+): <A extends unknown[], R>(
+  fn: (...args: A) => R | Promise<R>,
+) => (...args: A) => Promise<R | undefined>;
+export function budget(cfg: BudgetConfig, _fn?: never) {
   validateBudgetConfig(cfg);
   return <A extends unknown[], R>(fn: (...args: A) => R | Promise<R>) =>
     async (...args: A): Promise<R | undefined> => {
@@ -559,6 +576,12 @@ export function budget(cfg: BudgetConfig) {
  * enforcement applies to every instrumented call made inside (including across awaits). On
  * `onExceed: 'truncate'` it resolves to `undefined`; all other errors (including `BudgetExceeded`)
  * propagate.
+ *
+ * @example
+ * ```ts
+ * import { withBudget } from '@cendor/tokenguard';
+ * const spent = await withBudget({ usd: 0.5 }, async (b) => { await answer('hi'); return b.spent; });
+ * ```
  */
 export async function withBudget<T>(
   cfg: BudgetConfig,
@@ -596,6 +619,13 @@ function trackImpl<T>(tags: Record<string, unknown>, cb: () => T | Promise<T>): 
  * `with track(**tags):`). Tags merge with any enclosing `track(...)` and apply to every
  * instrumented call made inside — including across nested and async calls. `track.report` is the
  * documented alias for {@link report}.
+ *
+ * @example
+ * ```ts
+ * import { track, report } from '@cendor/tokenguard';
+ * await track({ feature: 'support', userId: 'alice' }, async () => answer('hi'));
+ * report(['feature']);   // spend grouped by tag
+ * ```
  */
 export const track: TrackFunction = Object.assign(trackImpl, { report }) as TrackFunction;
 
@@ -658,7 +688,14 @@ interface Group {
 /**
  * Aggregate recorded spend, grouped by the given tag keys. Rows carry `usd` as `Money` and
  * `tokens` = `input_tokens + output_tokens` (reasoning is a subset of output, NOT double-counted).
- * Aggregates only the retained window (see {@link dropped}).
+ * Aggregates only the retained window (see {@link dropped}). Row keys stay **snake_case** in both
+ * languages (`row.input_tokens`, not `row.inputTokens`).
+ *
+ * @example
+ * ```ts
+ * import { report } from '@cendor/tokenguard';
+ * for (const row of report(['feature'])) console.log(row.tags, row.usd, row.input_tokens);
+ * ```
  */
 export function report(groupBy?: string[]): Report {
   const keys = groupBy ?? [];

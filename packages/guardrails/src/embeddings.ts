@@ -61,6 +61,16 @@ export interface LocalEmbedderOptions {
  *
  * There is **no catch-rate claim** — the embedding quality is the model's, not a cendor claim;
  * calibrate the similarity threshold on your own inputs.
+ *
+ * It is `embeddings.localEmbedder`, **not** `rules.localEmbedder` — and needs the
+ * `@huggingface/transformers` optional peer.
+ *
+ * @example
+ * ```ts
+ * import { rules, embeddings } from '@cendor/guardrails';
+ * const embed = await embeddings.localEmbedder();   // npm i @huggingface/transformers
+ * const rail = rules.deniedTopics(embed, ['medical advice']);
+ * ```
  */
 export async function localEmbedder(opts: LocalEmbedderOptions = {}): Promise<Embed> {
   const model = opts.model ?? DEFAULT_MODEL;

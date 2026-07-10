@@ -222,7 +222,19 @@ export class GuardrailDecision {
   }
 }
 
-/** Thrown when a guardrail's action is `block` (fail-closed). Carries the recorded `decisions`. */
+/**
+ * Thrown when a guardrail's action is `block` (fail-closed). Carries the recorded `decisions`.
+ *
+ * @example
+ * ```ts
+ * import { rules, evaluate, GuardrailTripped } from '@cendor/guardrails';
+ * try {
+ *   evaluate([rules.keywordDeny(['bomb'])], 'input', userMsg);
+ * } catch (trip) {
+ *   if (trip instanceof GuardrailTripped) console.log(trip.decisions);
+ * }
+ * ```
+ */
 export class GuardrailTripped extends Error {
   readonly decisions: GuardrailDecision[];
 

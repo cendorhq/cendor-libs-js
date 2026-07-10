@@ -63,6 +63,15 @@ export interface EstimateOptions {
  * Estimate the cost of a call from the price snapshot, as exact `Decimal` `Money`. `cachedTokens` is a
  * subset of `inputTokens`, billed once: `input*(input−cached) + cached*cachedRate`. Unknown model
  * throws {@link UnknownModelError}. Mirrors `cendor.core.prices.estimate`.
+ *
+ * `outputTokens` (and the cache args) ride an **options object** — a documented divergence from
+ * Python, where they are positional (`prices.estimate(model, n, outputTokens)`).
+ *
+ * @example
+ * ```ts
+ * import { prices } from '@cendor/core';
+ * const cost = prices.estimate('gpt-4o', 1200, { outputTokens: 300 });
+ * ```
  */
 export function estimate(model: string, inputTokens: number, opts: EstimateOptions = {}): Money {
   const outputTokens = opts.outputTokens ?? 0;
@@ -94,7 +103,14 @@ export interface RegisterRates {
  * Register (or overwrite) a model's **per-token** rates in the active price table, so a model absent
  * from the bundled snapshot (a custom/deployment/Hub id) is costed and USD budgets bind on it.
  * Rates are exact `Decimal`. The higher-level `@cendor/sdk` `registerModelPrice` handles per-1M/1K
- * unit conversion before calling this. Dropped by {@link _reset}.
+ * unit conversion before calling this. Dropped by {@link _reset}. (Python has no `prices.register` —
+ * there you register a price with `cendor.sdk.register_model_price(...)`.)
+ *
+ * @example
+ * ```ts
+ * import { prices } from '@cendor/core';
+ * prices.register('my-model', { input: '0.000001', output: '0.000002' });  // per-token Decimal rates
+ * ```
  */
 export function register(model: string, rates: RegisterRates): void {
   const t = ensureLoaded();

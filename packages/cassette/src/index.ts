@@ -527,13 +527,15 @@ async function runManaged<T>(
 }
 
 /**
- * Context-manager form (async-callback scope): record/replay everything the `body` does.
+ * Context-manager form (async-callback scope): record/replay everything the `body` does. A second
+ * overload takes `{ mode: 'record' | 'replay' | 'rerecord' | 'auto' }` between the target and body.
  *
+ * @example
  * ```ts
- * await using('tests/fixtures/run.json', async () => {
- *   const resp = await client.chat.completions.create({ model, messages });
+ * import * as cassette from '@cendor/cassette';
+ * await cassette.using('tests/x.json', async () => {
+ *   await client.chat.completions.create({ model, messages });   // recorded once, replayed offline
  * });
- * await using('run.json', { mode: 'replay' }, async () => { ... });
  * ```
  */
 export function using<T>(target: string | CassetteStorage, body: () => T | Promise<T>): Promise<T>;
@@ -557,9 +559,11 @@ export function using<T>(
  * Decorator form: record the wrapped run on first use, replay it thereafter. The returned wrapper
  * is async (the instrumented client calls are async in TS).
  *
+ * @example
  * ```ts
- * const runAgent = use('run.json')(async () => { ... });
- * await runAgent();
+ * import { use } from '@cendor/cassette';
+ * const runAgent = use('run.json')(async () => respond('hi'));
+ * await runAgent();   // records the first run, replays after
  * ```
  */
 export function use(
@@ -608,6 +612,12 @@ function pyTruthy(v: PyValue): boolean {
  * `{kind: 'llm'|'tool', request: {...}, response|result: ...}`; `_meta` and unrecognized lines are
  * skipped. Returns the number of entries written. Always writes v2; `response_type` is `"object"`
  * for every promoted entry (a promote asymmetry vs. live recording — parity with Python).
+ *
+ * @example
+ * ```ts
+ * import { promote } from '@cendor/cassette';
+ * const n = promote('trace.jsonl', 'tests/run.json');   // JSONL call trace -> replayable cassette
+ * ```
  */
 export function promote(tracePath: string, to: string, redact: Redact = true): number {
   const redactor = resolveRedactor(redact);
@@ -763,8 +773,17 @@ function matchingBlocks(a: string, b: string): number {
   );
 }
 
-/** Assert `actual` means roughly `expected`. Lexical default (offline, deterministic). Inclusive
- * `>=` against `threshold`. */
+/**
+ * Assert `actual` means roughly `expected`. Lexical default (offline, deterministic). Inclusive
+ * `>=` against `threshold`.
+ *
+ * @example
+ * ```ts
+ * import * as cassette from '@cendor/cassette';
+ * const out = 'this line explains the charge on your invoice';
+ * expect(cassette.semanticMatch(out, 'explains the charge')).toBe(true);
+ * ```
+ */
 export function semanticMatch(
   actual: string,
   expected: string,

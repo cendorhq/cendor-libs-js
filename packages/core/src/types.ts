@@ -11,6 +11,12 @@ import { Dec, type Decimal, type DecimalValue } from './decimal.js';
  * Accepts `number` / `string` / `Decimal` for `amount` and coerces to `Decimal` (numbers via their
  * string form, to avoid binary-float noise). Arithmetic and comparisons require a matching
  * `currency`. Scalar serialization is the string `"{amount} {currency}"` (e.g. `"0.0025 USD"`).
+ *
+ * @example
+ * ```ts
+ * import { Money } from '@cendor/core';
+ * const price = new Money('0.0025');   // pass a string or Decimal — a number works but risks float noise
+ * ```
  */
 export class Money {
   readonly amount: Decimal;

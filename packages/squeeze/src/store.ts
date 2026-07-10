@@ -31,6 +31,12 @@ export interface StoreBackend {
  * only genuinely-cold originals are dropped. Expanding a handle whose original was evicted throws
  * `KeyError` — the documented trade-off of a capped store. `null` (default) means unbounded (no
  * eviction, so recency is not tracked).
+ *
+ * @example
+ * ```ts
+ * import { MemoryStore, useStore } from '@cendor/squeeze';
+ * useStore(new MemoryStore(1000));   // bounded LRU: keep the 1000 most-recent originals
+ * ```
  */
 export class MemoryStore implements StoreBackend {
   private readonly data = new Map<string, string>();
@@ -86,6 +92,12 @@ export class MemoryStore implements StoreBackend {
  *
  * Writes are idempotent `INSERT OR IGNORE`s (content-addressed), so concurrent puts of the same
  * content are safe. `path` may be a file path or `":memory:"`.
+ *
+ * @example
+ * ```ts
+ * import { SQLiteStore, useStore } from '@cendor/squeeze';
+ * useStore(new SQLiteStore('cache.db'));   // capital 'SQL' — SQLiteStore, not SqliteStore
+ * ```
  */
 export class SQLiteStore implements StoreBackend {
   private readonly db: BetterSqlite3.Database;

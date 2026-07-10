@@ -180,6 +180,15 @@ async function runCheckAsync(
  * with any redactions applied in order; throws `GuardrailTripped` on the first block. An `async`
  * check throws here — use {@link evaluateAsync}. A *throwing* sync check honours its `onError`
  * policy; `timeout` applies to the async path only (no sync threads in JS).
+ *
+ * Under `@cendor/sdk` you don't call `evaluate` — pass `new Agent({ guardrails: [...] })`.
+ *
+ * @example
+ * ```ts
+ * import { rules, evaluate } from '@cendor/guardrails';
+ * const gate = [rules.keywordDeny(['ignore previous instructions'], { action: 'block' })];
+ * const { payload, decisions } = evaluate(gate, 'input', userMsg);
+ * ```
  */
 export function evaluate(
   guardrails: readonly Guardrail[],

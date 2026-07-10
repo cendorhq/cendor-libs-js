@@ -144,7 +144,16 @@ export function isExact(model: string): boolean {
   return method(model) === 'exact';
 }
 
-/** Count tokens for a string or a list of chat messages under `model`. */
+/**
+ * Count tokens for a string or a list of chat messages under `model`. It's `tokens.count`, not
+ * `countTokens`; the model is the second positional arg.
+ *
+ * @example
+ * ```ts
+ * import { tokens } from '@cendor/core';
+ * const n = tokens.count([{ role: 'user', content: 'hi' }], 'gpt-4o');
+ * ```
+ */
 export function count(textOrMessages: string | Message[], model: string): number {
   const fam = family(model);
   const custom = counters.get(fam);

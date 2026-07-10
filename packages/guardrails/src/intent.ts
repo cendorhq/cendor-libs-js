@@ -83,6 +83,12 @@ export interface IntentOptions {
  * `mode:"deny"` trips on a match; `mode:"allow"` trips when nothing matched (off-topic). Records
  * `metadata.intent` / `metadata.score`. No accuracy claim; calibrate `threshold` (and prefer `flag`)
  * before you `block`.
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.intent({ support: ['reset my password'] }, { embed, mode: 'allow' });
+ * ```
  */
 export function intent(
   intents: Record<string, readonly string[]> | readonly string[],

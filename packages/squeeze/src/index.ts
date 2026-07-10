@@ -57,6 +57,12 @@ let backend: StoreBackend = new MemoryStore();
  * Swap the CCR backend (e.g. `SQLiteStore`); returns the previous one. A backend is any object with
  * `get(key) -> string` and `put(key, value) -> void`. Handles expand against whichever backend is
  * active at expand time.
+ *
+ * @example
+ * ```ts
+ * import { SQLiteStore, useStore } from '@cendor/squeeze';
+ * useStore(new SQLiteStore('cache.db'));   // persist originals across processes
+ * ```
  */
 export function useStore(store: StoreBackend): StoreBackend {
   const previous = backend;
@@ -101,7 +107,18 @@ export class Handle {
     return t === undefined || t === null ? '' : String(t);
   }
 
-  /** Serialize the handle (not the original). Persist it alongside a durable store. */
+  /**
+   * Serialize the handle (not the original). Persist it alongside a durable store. Python casing is
+   * `to_dict` / `from_dict`; the TS surface is camelCase.
+   *
+   * @example
+   * ```ts
+   * import { compress, Handle } from '@cendor/squeeze';
+   * const [, handle] = compress('some verbose log line…');
+   * const data = handle.toDict();                    // persist this JSON
+   * const original = Handle.fromDict(data).expand(); // rebuild + restore later
+   * ```
+   */
   toDict(): Record<string, unknown> {
     return {
       id: this.id,
@@ -111,7 +128,17 @@ export class Handle {
     };
   }
 
-  /** Rebuild a handle from {@link toDict}; `expand()` resolves via the active store. */
+  /**
+   * Rebuild a handle from {@link toDict}; `expand()` resolves via the active store. Python casing is
+   * `from_dict`.
+   *
+   * @example
+   * ```ts
+   * import { Handle } from '@cendor/squeeze';
+   * const data = { id: 'x', kind: 'json', original_ref: 'abc123', restore_map: {} };
+   * const handle = Handle.fromDict(data);   // rebuild a persisted handle
+   * ```
+   */
   static fromDict(data: Record<string, unknown>): Handle {
     return new Handle(String(data.id), String(data.kind), String(data.original_ref), {
       ...((data.restore_map as Record<string, unknown> | undefined) ?? {}),
@@ -219,6 +246,13 @@ export interface CompressOptions {
  * @param opts `kind` (`"auto"` detects), `targetTokens` (best-effort budget, never exceeded),
  *   `model` (for token counting, default `"gpt-4o"`), `fidelity` (`"lossless" | "balanced" |
  *   "aggressive"`, default `"balanced"`).
+ *
+ * @example
+ * ```ts
+ * import { compress } from '@cendor/squeeze';
+ * const [small, handle] = compress({ id: 42, items: [], meta: null }, { kind: 'json', fidelity: 'balanced' });
+ * const original = handle.expand();   // reversible — exact byte-for-byte restore
+ * ```
  */
 export function compress(content: unknown, opts: CompressOptions = {}): [string, Handle] {
   const fidelity = opts.fidelity ?? 'balanced';

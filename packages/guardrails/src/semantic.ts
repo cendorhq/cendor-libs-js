@@ -103,6 +103,12 @@ export interface GroundednessOptions {
  * Trip when the payload's max cosine similarity to any of `sources` is **below** `threshold` — i.e.
  * the response is not grounded in the retrieved passages (a RAG hallucination gate). Defaults to the
  * `output` stage and `action: 'flag'`. Empty `sources` never trips.
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.groundedness(embed, ['the retrieved source passage'], { threshold: 0.75 });
+ * ```
  */
 export function groundedness(
   embed: Embed,
@@ -149,6 +155,12 @@ export interface CustomCategoryOptions {
  *
  * `embed(text)` is **bring-your-own** — sync (keeps the check usable via `apply`) or async (a hosted
  * endpoint / `embeddings.localEmbedder()`, which makes the check async → use `applyAsync` / the SDK).
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.customCategory('code_requests', ['write a program'], embed, { action: 'flag' });
+ * ```
  */
 export function customCategory(
   category: string,
@@ -196,6 +208,12 @@ export interface DeniedTopicsOptions {
  * Trip when the payload's max cosine similarity to any denied-topic exemplar is **at or above**
  * `threshold` — steer an agent off subjects it must never engage. The reason names the closest topic
  * and the similarity — never the payload. A tuned heuristic: calibrate `threshold` on your inputs.
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.deniedTopics(embed, ['medical advice'], { action: 'block' });
+ * ```
  */
 export function deniedTopics(
   embed: Embed,

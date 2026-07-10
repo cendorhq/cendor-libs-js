@@ -202,6 +202,13 @@ export interface KeywordDenyOptions {
  * boundaries; `normalize` folds both sides (recommended hardening `["nfkc", "strip_zero_width"]`
  * closes full-width `"ｂｏｍｂ"` / zero-width `"b​omb"` evasions). Combining `normalize` with
  * `action:"redact"` also normalizes the surviving text (match offsets live in normalized space).
+ *
+ * @example
+ * ```ts
+ * import { rules, evaluate, GuardrailTripped } from '@cendor/guardrails';
+ * const gate = [rules.keywordDeny(['ignore previous instructions'], { action: 'block' })];
+ * const { payload, decisions } = evaluate(gate, 'input', userMsg);
+ * ```
  */
 export function keywordDeny(words: Iterable<string>, opts: KeywordDenyOptions = {}): Guardrail {
   const {
@@ -249,7 +256,15 @@ export interface RegexRuleOptions {
   replacement?: string;
 }
 
-/** Trip when `pattern` matches the payload text. `action:"redact"` substitutes each match. */
+/**
+ * Trip when `pattern` matches the payload text. `action:"redact"` substitutes each match.
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.regexRule(/\d{3}-\d{2}-\d{4}/, { action: 'redact' });
+ * ```
+ */
 export function regexRule(pattern: RegExp | string, opts: RegexRuleOptions = {}): Guardrail {
   const {
     action = 'flag',
@@ -326,6 +341,12 @@ export interface SpotlightOptions {
  *
  * **Honest limits (from Azure's own page):** a mitigation, not detection; `encode:true` inflates
  * token count (higher model cost, possible context-limit hits). `encode` defaults **off**.
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.spotlight({ stage: 'tool_output', delimiter: '<untrusted>' });
+ * ```
  */
 export function spotlight(opts: SpotlightOptions = {}): Guardrail {
   const {
@@ -364,7 +385,15 @@ export interface UrlRuleOptions {
   name?: string;
 }
 
-/** Trip when a URL's host is NOT on `domains` (or a subdomain of one). */
+/**
+ * Trip when a URL's host is NOT on `domains` (or a subdomain of one).
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.urlAllowlist(['example.com'], { action: 'block' });
+ * ```
+ */
 export function urlAllowlist(domains: Iterable<string>, opts: UrlRuleOptions = {}): Guardrail {
   const { stage = 'input', action = 'block', name = 'url_allowlist' } = opts;
   const allowed = [...domains].filter(Boolean);
@@ -378,7 +407,15 @@ export function urlAllowlist(domains: Iterable<string>, opts: UrlRuleOptions = {
   });
 }
 
-/** Trip when a URL's host is on `domains` (or a subdomain of one). */
+/**
+ * Trip when a URL's host is on `domains` (or a subdomain of one).
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.urlDeny(['phishing.example'], { action: 'block' });
+ * ```
+ */
 export function urlDeny(domains: Iterable<string>, opts: UrlRuleOptions = {}): Guardrail {
   const { stage = 'input', action = 'block', name = 'url_deny' } = opts;
   const denied = [...domains].filter(Boolean);
@@ -401,7 +438,15 @@ export interface LengthBoundsOptions {
   name?: string;
 }
 
-/** Trip when the payload exceeds `maxChars` and/or `maxTokens` (exact token counts via core). */
+/**
+ * Trip when the payload exceeds `maxChars` and/or `maxTokens` (exact token counts via core).
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.lengthBounds({ maxTokens: 4000, model: 'gpt-4o' });
+ * ```
+ */
 export function lengthBounds(opts: LengthBoundsOptions = {}): Guardrail {
   const {
     maxChars,
@@ -438,6 +483,12 @@ export interface JsonSchemaOptions {
  * Validate structured output against a minimal JSON Schema (`type`/`required`/`properties`/`items`,
  * recursively). Trips when the payload is not valid JSON or violates the schema. Pass the model's
  * raw text or an already-parsed object. Not the full spec (no `$ref`/`oneOf`/`pattern`).
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.jsonSchema({ type: 'object', required: ['answer'] });
+ * ```
  */
 export function jsonSchema(
   schema: Record<string, unknown>,
@@ -474,6 +525,14 @@ export interface CustomOptions {
  * arbitrary code, so it can throw or hang: `timeout` (seconds, async path) bounds it and `onError`
  * (`"fail_closed"` default / `"fail_open"`) decides what a throw or timeout does — either way the
  * failure is recorded as a decision.
+ *
+ * @example
+ * ```ts
+ * import { rules, Verdict } from '@cendor/guardrails';
+ * const rail = rules.custom((payload) =>
+ *   String(payload).includes('secret') ? new Verdict('block', 'no secrets') : null,
+ * );
+ * ```
  */
 export function custom(fn: Check, opts: CustomOptions = {}): Guardrail {
   return mkGuardrail(opts.name ?? (fn.name || 'custom'), opts.stage ?? 'input', fn, {
@@ -497,6 +556,12 @@ export interface LlmJudgeOptions {
  * *your* (sync or async) callable that makes whatever model call you want and returns a `Verdict`,
  * `true` to trip with the default `action`, a reason string, or `null`/`false` to pass. cendor ships
  * no model here: the extra call costs real tokens and latency — measure it. See "Honest limits".
+ *
+ * @example
+ * ```ts
+ * import { rules } from '@cendor/guardrails';
+ * const rail = rules.llmJudge(async (payload, ctx) => classify(payload), { action: 'block' });
+ * ```
  */
 export function llmJudge(
   judge: (
