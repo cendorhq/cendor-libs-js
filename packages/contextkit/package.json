@@ -36,7 +36,7 @@
   },
   "devDependencies": {
     "@cendor/squeeze": "workspace:^",
-    "fast-check": "^3.23.2"
+    "fast-check": "^4.9.0"
   },
   "keywords": [
     "llm",

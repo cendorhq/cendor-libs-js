@@ -53,6 +53,6 @@
     "access": "public"
   },
   "devDependencies": {
-    "fast-check": "^3.23.2"
+    "fast-check": "^4.9.0"
   }
 }
