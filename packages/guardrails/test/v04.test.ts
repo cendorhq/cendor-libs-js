@@ -6,7 +6,17 @@
 import { bus } from '@cendor/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GuardrailTripped } from '../src/decision.js';
-import { apply, evaluate, judge, loadPolicy, policySchema, presets, rules } from '../src/index.js';
+import {
+  apply,
+  applyAsync,
+  embeddings,
+  evaluate,
+  judge,
+  loadPolicy,
+  policySchema,
+  presets,
+  rules,
+} from '../src/index.js';
 
 beforeEach(() => bus._reset());
 afterEach(() => bus._reset());
@@ -261,3 +271,53 @@ describe('azureContentSafety breadth', () => {
 
 // keep `evaluate` imported (redaction round-trip parity with Python is exercised elsewhere)
 void evaluate;
+
+// ------------------------------------------------------------------- G2 async embed + localEmbedder
+
+describe('async embed support', () => {
+  const asyncEmbed = (t: string): Promise<number[]> => Promise.resolve(embed(t) as number[]);
+
+  it('customCategory accepts an async embed (check runs on the async path)', async () => {
+    const g = rules.customCategory(
+      'code_requests',
+      ['write a program', 'build an app'],
+      asyncEmbed,
+      {
+        threshold: 0.8,
+      },
+    );
+    const out = await applyAsync([g], 'input', 'create a hello world app');
+    expect(out.at(-1)?.metadata.category).toBe('code_requests');
+  });
+
+  it('intent embedding backend accepts an async embed', async () => {
+    const g = rules.intent(
+      { code: ['write a program'] },
+      { embed: asyncEmbed, mode: 'deny', threshold: 0.8 },
+    );
+    const out = await applyAsync([g], 'input', 'build an app');
+    expect(out.at(-1)?.metadata.intent).toBe('code');
+  });
+
+  it('an async embed makes the check async (sync apply throws)', () => {
+    const g = rules.customCategory('x', ['write a program'], asyncEmbed);
+    expect(() => apply([g], 'input', 'build an app')).toThrow(/async/);
+  });
+
+  it('a sync embed keeps the check synchronous (unchanged)', () => {
+    const g = rules.customCategory('x', ['write a program'], embed, { threshold: 0.8 });
+    // no throw on the sync path — proves back-compat
+    expect(() => apply([g], 'input', 'build an app')).not.toThrow();
+  });
+});
+
+describe('localEmbedder', () => {
+  it('exports a default model id', () => {
+    expect(embeddings.DEFAULT_MODEL).toContain('/');
+  });
+
+  it('raises an actionable error when @huggingface/transformers is absent', async () => {
+    // the optional peer is not installed in this workspace — the lazy import fails with a clear error
+    await expect(embeddings.localEmbedder()).rejects.toThrow(/@huggingface\/transformers/);
+  });
+});

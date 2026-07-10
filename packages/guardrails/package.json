@@ -25,6 +25,14 @@
   "dependencies": {
     "@cendor/core": "workspace:^"
   },
+  "peerDependencies": {
+    "@huggingface/transformers": ">=3"
+  },
+  "peerDependenciesMeta": {
+    "@huggingface/transformers": {
+      "optional": true
+    }
+  },
   "keywords": [
     "llm",
     "guardrails",

@@ -21,13 +21,26 @@ import { payloadText } from './rules.js';
 
 type Stage = string | readonly string[];
 type Action = 'block' | 'redact' | 'flag';
-export type Embed = (text: string) => number[] | readonly number[];
+/** A bring-your-own embedder — sync (a static model) or async (a hosted endpoint / transformers.js). */
+export type Embed = (
+  text: string,
+) => number[] | readonly number[] | Promise<number[] | readonly number[]>;
 export type Classify = (text: string) => string | Record<string, number>;
 export type IntentMode = 'deny' | 'allow';
 
 function resolveOnError(action: Action, onError?: OnError): OnError {
   if (onError !== undefined) return onError;
   return action === 'flag' ? 'fail_open' : 'fail_closed';
+}
+
+function isThenable<T>(x: unknown): x is Promise<T> {
+  return x != null && typeof (x as { then?: unknown }).then === 'function';
+}
+
+/** Apply `fn` to a value that may be a Promise, staying **sync when the value is sync**. `fn` may
+ * itself return a Promise; nested levels flatten (Promise.then), so the result is `R | Promise<R>`. */
+function chain<T, R>(v: T | Promise<T>, fn: (t: T) => R | Promise<R>): R | Promise<R> {
+  return isThenable<T>(v) ? v.then(fn) : fn(v as T);
 }
 
 function cosine(a: readonly number[], b: readonly number[]): number {
@@ -113,31 +126,45 @@ function embeddingCheck(
   threshold: number,
   action: Action,
 ): Check {
-  let cache: [string, number[]][] | undefined;
-  const vectors = (): [string, number[]][] => {
-    if (cache === undefined) {
-      cache = [];
-      for (const [label, examples] of Object.entries(intents)) {
-        for (const ex of examples) cache.push([label, [...embed(ex)]]);
-      }
+  const pairs: [string, string][] = [];
+  for (const [label, examples] of Object.entries(intents)) {
+    for (const ex of examples) pairs.push([label, ex]);
+  }
+  let cache: [string, number[]][] | Promise<[string, number[]][]> | undefined;
+  const vectors = (): [string, number[]][] | Promise<[string, number[]][]> => {
+    if (cache !== undefined) return cache;
+    const raw = pairs.map(([label, ex]) => [label, embed(ex)] as [string, ReturnType<Embed>]);
+    if (raw.some(([, v]) => isThenable(v))) {
+      cache = Promise.all(
+        raw.map(([label, v]) =>
+          Promise.resolve(v).then((vec) => [label, [...vec]] as [string, number[]]),
+        ),
+      ).then((v) => {
+        cache = v;
+        return v;
+      });
+      return cache;
     }
+    cache = raw.map(([label, v]) => [label, [...(v as readonly number[])]] as [string, number[]]);
     return cache;
   };
-  return (payload: unknown, _ctx: Context) => {
-    const vecs = vectors();
-    if (vecs.length === 0) return null;
-    const query = [...embed(payloadText(payload))];
-    let bestLabel = '';
-    let bestScore = Number.NEGATIVE_INFINITY;
-    for (const [label, vec] of vecs) {
-      const sim = cosine(query, vec);
-      if (sim > bestScore) {
-        bestScore = sim;
-        bestLabel = label;
-      }
-    }
-    return verdict(mode, action, bestScore >= threshold, bestLabel, bestScore, threshold);
-  };
+  return (payload: unknown, _ctx: Context) =>
+    chain(vectors(), (vecs) => {
+      if (vecs.length === 0) return null;
+      return chain(embed(payloadText(payload)), (q) => {
+        const query = [...q];
+        let bestLabel = '';
+        let bestScore = Number.NEGATIVE_INFINITY;
+        for (const [label, vec] of vecs) {
+          const sim = cosine(query, vec);
+          if (sim > bestScore) {
+            bestScore = sim;
+            bestLabel = label;
+          }
+        }
+        return verdict(mode, action, bestScore >= threshold, bestLabel, bestScore, threshold);
+      });
+    });
 }
 
 function classifierCheck(

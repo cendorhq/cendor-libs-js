@@ -54,6 +54,7 @@ export * as adapters from './adapters.js';
 export * as semantic from './semantic.js';
 export * as intent from './intent.js';
 export * as presets from './presets.js';
+export * as embeddings from './embeddings.js';
 export * as redteam from './redteam.js';
 export { loadPolicy, POLICY_RULE_NAMES, policySchema } from './policy.js';
 export type { LoadedPolicy, LoadPolicyOptions } from './policy.js';
