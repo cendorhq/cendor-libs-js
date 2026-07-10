@@ -22,6 +22,7 @@
   "files": [
     "dist",
     "README.md",
+    "INTEGRATION.md",
     "LICENSE",
     "NOTICE"
   ],
