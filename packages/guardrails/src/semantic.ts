@@ -98,6 +98,58 @@ export function groundedness(
   return defineGuardrail(check, { name, stage, timeout, onError: resolveOnError(action, onError) });
 }
 
+export interface CustomCategoryOptions {
+  threshold?: number;
+  stage?: Stage;
+  action?: Action;
+  name?: string;
+  timeout?: number;
+  onError?: OnError;
+}
+
+/**
+ * Trip when the payload is semantically close to a **custom category** you define by example — the
+ * local, `$0` counterpart to Azure Content Safety's *rapid custom categories* (description + examples
+ * → embedding search), with no cloud call and no training step. Trips when the payload's max cosine
+ * similarity to any example is **at or above** `threshold`, recording `metadata.category` /
+ * `metadata.score`; catches paraphrases `keywordDeny` misses. Defaults to `action:'flag'` (a tuned
+ * heuristic — calibrate before you block). No catch-rate claim; empty `examples` never trips.
+ *
+ * `embed(text)` is **bring-your-own** — a local sentence-transformer, a hosted endpoint, or e.g. a
+ * transformers.js pipeline. (There is no zero-config `localEmbedder` in TS yet — model2vec is
+ * Python-only; parity 🚧.)
+ */
+export function customCategory(
+  category: string,
+  examples: readonly string[],
+  embed: Embed,
+  opts: CustomCategoryOptions = {},
+): Guardrail {
+  const {
+    threshold = 0.8,
+    stage = 'input',
+    action = 'flag',
+    name = `custom_category:${category}`,
+    timeout,
+    onError,
+  } = opts;
+  const exampleVecs = lazyVectors(embed, [...examples]);
+  const check: Check = (payload: unknown, _ctx: Context) => {
+    const vecs = exampleVecs();
+    if (vecs.length === 0) return null;
+    const query = [...embed(payloadText(payload))];
+    const best = vecs.reduce((m, v) => Math.max(m, cosine(query, v)), Number.NEGATIVE_INFINITY);
+    if (best < threshold) return null;
+    return new Verdict(
+      action,
+      `custom category ${JSON.stringify(category)}: sim ${best.toFixed(2)} >= ${threshold}`,
+      null,
+      { category, score: Math.round(best * 1e4) / 1e4 },
+    );
+  };
+  return defineGuardrail(check, { name, stage, timeout, onError: resolveOnError(action, onError) });
+}
+
 export interface DeniedTopicsOptions {
   threshold?: number;
   stage?: Stage;

@@ -41,6 +41,95 @@ export interface LoadedPolicy extends Array<Guardrail> {
 export interface LoadPolicyOptions {
   /** Parse `source` when it is a string (default `JSON.parse`); pass e.g. a YAML parser for YAML. */
   parse?: (text: string) => unknown;
+  /** When `true`, run a structural check (see {@link policySchema}) before building any rule. */
+  validate?: boolean;
+}
+
+const STAGE_NAMES = ['input', 'tool_call', 'tool_output', 'output'] as const;
+const ACTION_NAMES = ['block', 'redact', 'flag'] as const;
+
+/**
+ * The JSON Schema (Draft 2020-12) for a policy document — mirrors the `policy.schema.json` shipped in
+ * the Python package (there is no filesystem in an all-runtime package, so it is an inline constant).
+ * Reference it from your policy file's `$schema` for editor autocomplete, or use it in your tooling.
+ * `loadPolicy(text, { validate: true })` checks a document against this shape.
+ */
+export function policySchema(): Record<string, unknown> {
+  return {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    $id: 'https://cendor.ai/schemas/guardrails-policy.schema.json',
+    title: 'cendor-guardrails policy',
+    type: 'object',
+    required: ['guardrails'],
+    additionalProperties: false,
+    properties: {
+      version: { type: 'string' },
+      guardrails: { type: 'array', items: { $ref: '#/$defs/guardrail' } },
+    },
+    $defs: {
+      stage: { enum: [...STAGE_NAMES] },
+      guardrail: {
+        type: 'object',
+        required: ['rule'],
+        additionalProperties: false,
+        properties: {
+          rule: { enum: [...POLICY_RULE_NAMES] },
+          args: { type: 'object' },
+          stage: {
+            oneOf: [
+              { $ref: '#/$defs/stage' },
+              { type: 'array', items: { $ref: '#/$defs/stage' }, minItems: 1 },
+            ],
+          },
+          action: { enum: [...ACTION_NAMES] },
+          name: { type: 'string' },
+        },
+      },
+    },
+  };
+}
+
+/**
+ * A small structural check of a policy document (opt-in via `validate: true`) — clearer, earlier
+ * errors than letting a factory throw. Not a full JSON-Schema engine; {@link policySchema} is the
+ * reference for tooling.
+ */
+function validateDocument(doc: Record<string, unknown>): void {
+  if ('version' in doc && typeof doc.version !== 'string') {
+    throw new Error("policy 'version' must be a string");
+  }
+  const entries = doc.guardrails;
+  if (!Array.isArray(entries)) throw new Error("policy document must have a 'guardrails' array");
+  entries.forEach((entry, i) => {
+    const where = `guardrails[${i}]`;
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`${where} must be an object`);
+    }
+    const e = entry as Record<string, unknown>;
+    if (!POLICY_RULE_NAMES.includes(String(e.rule))) {
+      throw new Error(
+        `${where}: unknown or non-declarative rule ${JSON.stringify(e.rule)}; policy documents support ${POLICY_RULE_NAMES.join(', ')}`,
+      );
+    }
+    if ('args' in e && (e.args === null || typeof e.args !== 'object' || Array.isArray(e.args))) {
+      throw new Error(`${where}.args must be an object`);
+    }
+    if ('action' in e && !(ACTION_NAMES as readonly string[]).includes(String(e.action))) {
+      throw new Error(
+        `${where}.action ${JSON.stringify(e.action)} must be one of ${ACTION_NAMES.join(', ')}`,
+      );
+    }
+    if ('stage' in e) {
+      const stages = Array.isArray(e.stage) ? e.stage : [e.stage];
+      for (const s of stages) {
+        if (!(STAGE_NAMES as readonly string[]).includes(String(s))) {
+          throw new Error(
+            `${where}.stage ${JSON.stringify(s)} must be one of ${STAGE_NAMES.join(', ')}`,
+          );
+        }
+      }
+    }
+  });
 }
 
 const arr = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
@@ -115,6 +204,7 @@ export function loadPolicy(
     throw new Error('policy document must be an object');
   }
   const doc = config as Record<string, unknown>;
+  if (opts.validate) validateDocument(doc);
   const entries = doc.guardrails;
   if (!Array.isArray(entries)) throw new Error("policy document must have a 'guardrails' array");
 

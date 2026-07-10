@@ -143,6 +143,38 @@ export const ADHERENCE_SYSTEM =
   '"<one short sentence>"}. Set "trip" to true only if the tool call is misaligned with the ' +
   'instruction. Do not include markdown, code fences, or any text outside the JSON object.';
 
+function intentLabels(intents: Record<string, unknown> | readonly string[]): string[] {
+  if (Array.isArray(intents)) return intents.map(String);
+  return Object.keys(intents as Record<string, unknown>);
+}
+
+/**
+ * Build the `policy` string for the **LLM-judge intent backend** — feed it to {@link judge} (which
+ * wraps it in {@link verdictPrompt} + {@link parseVerdict}) and hand the result to `rules.llmJudge`.
+ * The small-LLM tier of `rules.intent`. `mode:"deny"` trips when the request is about any listed
+ * topic; `mode:"allow"` trips when it falls outside all of them (off-topic).
+ *
+ * ```ts
+ * import { judge, rules } from '@cendor/guardrails';
+ * const policy = judge.intentPrompt({ support: [], billing: [] }, 'allow');
+ * const rail = rules.llmJudge(judge.judge(respond, policy), { stage: 'input', action: 'flag' });
+ * ```
+ */
+export function intentPrompt(
+  intents: Record<string, unknown> | readonly string[],
+  mode: 'deny' | 'allow' = 'deny',
+): string {
+  if (mode !== 'deny' && mode !== 'allow') {
+    throw new Error(`unknown mode ${JSON.stringify(mode)}; must be 'deny' or 'allow'`);
+  }
+  const labels = intentLabels(intents);
+  const joined = labels.length > 0 ? labels.join(', ') : '(none given)';
+  if (mode === 'allow') {
+    return `The assistant may only help with these topics: ${joined}. Trip if the user's request falls outside all of them (it is off-topic for this assistant).`;
+  }
+  return `The assistant must refuse these topics: ${joined}. Trip if the user's request is about any of them.`;
+}
+
 function instructionOf(ctx: Context): string {
   const instr = (ctx.instruction ?? '').trim();
   if (instr) return instr;

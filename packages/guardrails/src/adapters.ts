@@ -392,8 +392,19 @@ function bedrockMasked(resp: unknown): unknown {
   return null;
 }
 
+export type AzureCheck = 'prompt_shields' | 'harm_categories';
+
 export interface AzureContentSafetyOptions {
+  /** Which surfaces to call (each is a metered request; the first to trip wins). */
+  checks?: readonly AzureCheck[];
   documents?: readonly string[];
+  /** For `"harm_categories"`: restrict to Azure's category names (e.g. `["Hate", "Violence"]`). */
+  harmCategories?: readonly string[];
+  /** Trip when a category's severity ≥ this (0/2/4/6 four-level scale; default 4 = medium). */
+  harmThreshold?: number;
+  /** Pass custom blocklist names through to the `analyzeText` call. */
+  blocklistNames?: readonly string[];
+  haltOnBlocklist?: boolean;
   stage?: Stage;
   action?: Action;
   name?: string;
@@ -402,43 +413,121 @@ export interface AzureContentSafetyOptions {
 }
 
 /**
- * Azure AI Content Safety **Prompt Shields** as a guardrail — detects user-prompt/document
- * injection & jailbreak attacks. `client` is duck-typed on
- * `shieldPrompt({ userPrompt, documents }) => Promise<resp>` and trips when the response's
- * `userPromptAnalysis.attackDetected` (or any `documentsAnalysis[].attackDetected`) is true — a binary
- * signal, so `block` / `flag` are the meaningful actions. Metered per text record — set `timeout`.
+ * Azure AI Content Safety as a guardrail — **Prompt Shields** (jailbreak / indirect injection) and,
+ * opt-in, the **harm-category classifier** (hate / sexual / violence / self-harm with severity) and
+ * custom **blocklists**. `client` is duck-typed. `checks` selects which surfaces to call (default
+ * `["prompt_shields"]`, unchanged from before):
+ *
+ * - `"prompt_shields"` — `shieldPrompt({ userPrompt, documents })`; trips on any `attackDetected`.
+ * - `"harm_categories"` — `analyzeText({ text })`; trips when a category's severity ≥ `harmThreshold`
+ *   (max severity carried in `metadata.severity`); `blocklistNames` ride the same call.
+ *
+ * Metered per text record — set `timeout`. *(Groundedness-as-a-service is a planned follow-up — its
+ * preview API needs the grounding sources plumbed in; use the local `rules.groundedness` meanwhile.)*
  */
 export function azureContentSafety(
   client: unknown,
   opts: AzureContentSafetyOptions = {},
 ): Guardrail {
   const {
+    checks = ['prompt_shields'],
     stage = 'input',
     action = 'block',
     name = 'azure_content_safety',
+    harmCategories,
+    harmThreshold = 4,
+    blocklistNames,
+    haltOnBlocklist = false,
     timeout,
     onError,
   } = opts;
+  const selected = [...checks];
+  for (const c of selected) {
+    if (c !== 'prompt_shields' && c !== 'harm_categories') {
+      throw new Error(
+        `unknown azure check ${JSON.stringify(c)}; must be a subset of prompt_shields, harm_categories`,
+      );
+    }
+  }
   const documents = opts.documents ? [...opts.documents] : [];
   const check: Check = async (payload, _ctx) => {
-    const shield = get(client, 'shieldPrompt');
-    if (typeof shield !== 'function') {
-      throw new TypeError('azureContentSafety client has no shieldPrompt(options) method');
+    const text = payloadText(payload);
+    if (selected.includes('prompt_shields')) {
+      const shield = get(client, 'shieldPrompt');
+      if (typeof shield !== 'function') {
+        throw new TypeError('azureContentSafety client has no shieldPrompt(options) method');
+      }
+      const resp = await (shield as (o: unknown) => unknown).call(client, {
+        userPrompt: text,
+        documents,
+      });
+      const hits = azureAttacks(resp);
+      if (hits.length > 0) {
+        return new Verdict(
+          action,
+          `Azure Prompt Shields: attack detected (${hits.join(', ')})`,
+          null,
+          annotation({ detected: true, filtered: action !== 'flag' }),
+        );
+      }
     }
-    const resp = await (shield as (o: unknown) => unknown).call(client, {
-      userPrompt: payloadText(payload),
-      documents,
-    });
-    const hits = azureAttacks(resp);
-    if (hits.length === 0) return null;
-    return new Verdict(
-      action,
-      `Azure Prompt Shields: attack detected (${hits.join(', ')})`,
-      null,
-      annotation({ detected: true, filtered: action !== 'flag' }),
-    );
+    if (selected.includes('harm_categories')) {
+      const analyze = get(client, 'analyzeText');
+      if (typeof analyze !== 'function') {
+        throw new TypeError('azureContentSafety client has no analyzeText(options) method');
+      }
+      const options: Record<string, unknown> = { text, outputType: 'FourSeverityLevels' };
+      if (harmCategories) options.categories = [...harmCategories];
+      if (blocklistNames) {
+        options.blocklistNames = [...blocklistNames];
+        options.haltOnBlocklistHit = haltOnBlocklist;
+      }
+      const resp = await (analyze as (o: unknown) => unknown).call(client, options);
+      const v = azureHarmVerdict(resp, harmThreshold, action);
+      if (v !== null) return v;
+    }
+    return null;
   };
   return mk(check, { name, stage, action, timeout, onError });
+}
+
+function azureHarmVerdict(resp: unknown, threshold: number, action: Action): Verdict | null {
+  const analysis = get(resp, 'categoriesAnalysis') ?? get(resp, 'categories_analysis');
+  const hits: string[] = [];
+  let maxSev = 0;
+  if (Array.isArray(analysis)) {
+    for (const item of analysis) {
+      const sev = get(item, 'severity');
+      if (typeof sev === 'number' && sev >= threshold) {
+        hits.push(`${get(item, 'category')}:${Math.trunc(sev)}`);
+        maxSev = Math.max(maxSev, Math.trunc(sev));
+      }
+    }
+  }
+  const blocklistHits = azureBlocklistHits(resp);
+  if (hits.length === 0 && blocklistHits.length === 0) return null;
+  const parts = [...hits, ...blocklistHits.map((b) => `blocklist:${b}`)];
+  return new Verdict(
+    action,
+    `Azure Content Safety: ${parts.join(', ')}`,
+    null,
+    annotation({
+      detected: true,
+      filtered: action !== 'flag',
+      severity: maxSev || undefined,
+    }),
+  );
+}
+
+function azureBlocklistHits(resp: unknown): string[] {
+  const matches = get(resp, 'blocklistsMatch') ?? get(resp, 'blocklists_match');
+  const out: string[] = [];
+  if (Array.isArray(matches)) {
+    for (const m of matches) {
+      out.push(String(get(m, 'blocklistName') ?? get(m, 'blocklist_name') ?? 'blocklist'));
+    }
+  }
+  return uniq(out);
 }
 
 function azureAttacks(resp: unknown): string[] {

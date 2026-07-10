@@ -110,6 +110,75 @@ function resolveOnError(action: 'block' | 'redact' | 'flag', onError?: OnError):
   return action === 'flag' ? 'fail_open' : 'fail_closed';
 }
 
+// --------------------------------------------------------------------------- matching helpers
+
+/** Match modes for `keywordDeny` (`normalize` steps live in {@link NORMALIZATIONS}). */
+export type MatchMode = 'substring' | 'word';
+export const NORMALIZATIONS = [
+  'nfkc',
+  'nfc',
+  'nfkd',
+  'nfd',
+  'casefold',
+  'strip_zero_width',
+  'collapse_whitespace',
+] as const;
+export type Normalization = (typeof NORMALIZATIONS)[number];
+
+// Zero-width / invisible characters an attacker can splice into a term to slip a substring match
+// ("b<zwsp>omb"); stripped only when "strip_zero_width" is in `normalize`. An alternation of explicit
+// escapes (not a character class) so a joiner can't compose (biome noMisleadingCharacterClass).
+const ZERO_WIDTH_RE = /​|‌|‍|⁠|﻿|­|᠎/g;
+const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Build a text normalizer from `steps` (a subset of {@link NORMALIZATIONS}). Returns identity when
+ * `steps` is empty — so the default matcher is byte-for-byte unchanged. Applied to both sides of a
+ * comparison so a deny term and the payload fold the same way. (`casefold` maps to `toLowerCase()`,
+ * the closest all-runtime fold.)
+ */
+function normalizer(steps: readonly string[] | undefined): (s: string) => string {
+  if (!steps || steps.length === 0) return (s) => s;
+  const ops: ((s: string) => string)[] = [];
+  for (const step of steps) {
+    const key = step.toLowerCase();
+    if (key === 'nfkc' || key === 'nfc' || key === 'nfkd' || key === 'nfd') {
+      const form = key.toUpperCase() as 'NFKC' | 'NFC' | 'NFKD' | 'NFD';
+      ops.push((s) => s.normalize(form));
+    } else if (key === 'casefold') {
+      ops.push((s) => s.toLowerCase());
+    } else if (key === 'strip_zero_width') {
+      ops.push((s) => s.replace(ZERO_WIDTH_RE, ''));
+    } else if (key === 'collapse_whitespace') {
+      ops.push((s) => s.replace(/\s+/g, ' ').trim());
+    } else {
+      throw new Error(
+        `unknown normalize step ${JSON.stringify(step)}; must be one of ${NORMALIZATIONS.join(', ')}`,
+      );
+    }
+  }
+  return (s) => ops.reduce((acc, op) => op(acc), s);
+}
+
+const WORD_CHAR = /[\p{L}\p{N}_]/u;
+
+/**
+ * The regex fragment for one deny `term` under the chosen `match` mode. `"substring"` is the escaped
+ * literal; `"word"` anchors it on Unicode word boundaries (JS `\b` is ASCII-only, so we use
+ * `\p{L}\p{N}_` lookarounds under the `u` flag) and lets interior whitespace span line-wraps (`\s+`),
+ * so `"python code"` still hits across a newline but not inside `"pythoncoder"`.
+ */
+function termRegex(term: string, match: MatchMode): string {
+  if (match === 'substring') return escapeRegex(term);
+  const stripped = term.trim();
+  const parts = stripped.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  const body = parts.map(escapeRegex).join('\\s+');
+  const left = WORD_CHAR.test(stripped[0]!) ? '(?<![\\p{L}\\p{N}_])' : '';
+  const right = WORD_CHAR.test(stripped[stripped.length - 1]!) ? '(?![\\p{L}\\p{N}_])' : '';
+  return `${left}${body}${right}`;
+}
+
 // --------------------------------------------------------------------------- rules
 
 export interface KeywordDenyOptions {
@@ -117,33 +186,58 @@ export interface KeywordDenyOptions {
   action?: 'block' | 'redact' | 'flag';
   name?: string;
   ignoreCase?: boolean;
+  /** `"substring"` (default) matches anywhere; `"word"` anchors on Unicode word boundaries. */
+  match?: MatchMode;
+  /** Fold both payload and terms before comparing (e.g. `["nfkc", "strip_zero_width"]`). Default off. */
+  normalize?: readonly Normalization[];
 }
 
-/** Trip when any of `words` appears (substring, case-insensitive by default). */
+/**
+ * Trip when any of `words` appears in the payload; records the matched term in
+ * `metadata.matched`. `action:"redact"` scrubs matches to `[redacted]`.
+ *
+ * Matching options default to the original substring behaviour (a deny-list is a security primitive,
+ * so nothing changes silently in a minor). `match:"word"` anchors each term on Unicode word
+ * boundaries; `normalize` folds both sides (recommended hardening `["nfkc", "strip_zero_width"]`
+ * closes full-width `"ｂｏｍｂ"` / zero-width `"b​omb"` evasions). Combining `normalize` with
+ * `action:"redact"` also normalizes the surviving text (match offsets live in normalized space).
+ */
 export function keywordDeny(words: Iterable<string>, opts: KeywordDenyOptions = {}): Guardrail {
-  const { stage = 'input', action = 'block', name = 'keyword_deny', ignoreCase = true } = opts;
-  const terms = [...words].filter(Boolean);
-  const pattern =
-    terms.length > 0
-      ? new RegExp(
-          terms.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
-          ignoreCase ? 'i' : '',
-        )
-      : null;
+  const {
+    stage = 'input',
+    action = 'block',
+    name = 'keyword_deny',
+    ignoreCase = true,
+    match = 'substring',
+    normalize,
+  } = opts;
+  if (match !== 'substring' && match !== 'word') {
+    throw new Error(`unknown match ${JSON.stringify(match)}; must be 'substring' or 'word'`);
+  }
+  const norm = normalizer(normalize);
+  const fragments = [...words]
+    .filter(Boolean)
+    .map((w) => termRegex(norm(w), match))
+    .filter(Boolean);
+  const flags = `${ignoreCase ? 'i' : ''}u`;
+  const pattern = fragments.length > 0 ? new RegExp(fragments.join('|'), flags) : null;
   return mkGuardrail(name, stage, (payload) => {
     if (pattern === null) return null;
-    const match = pattern.exec(payloadText(payload));
-    if (match === null) return null;
-    const reason = `denied keyword: ${JSON.stringify(match[0])}`;
+    const match_ = pattern.exec(norm(payloadText(payload)));
+    if (match_ === null) return null;
+    const hit = match_[0];
+    const reason = `denied keyword: ${JSON.stringify(hit)}`;
+    const meta = { matched: hit };
     if (action === 'redact') {
-      const g = new RegExp(pattern.source, ignoreCase ? 'gi' : 'g');
+      const g = new RegExp(pattern.source, `${flags}g`);
       return new Verdict(
         'redact',
         reason,
-        redactPayload(payload, (s) => s.replace(g, '[redacted]')),
+        redactPayload(payload, (s) => norm(s).replace(g, '[redacted]')),
+        meta,
       );
     }
-    return new Verdict(action, reason);
+    return new Verdict(action, reason, null, meta);
   });
 }
 
@@ -490,4 +584,5 @@ export {
   azureContentSafety,
   modelArmor,
 } from './adapters.js';
-export { groundedness, deniedTopics } from './semantic.js';
+export { groundedness, deniedTopics, customCategory } from './semantic.js';
+export { intent } from './intent.js';
