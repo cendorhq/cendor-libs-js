@@ -112,6 +112,57 @@ describe('json compression', () => {
     expect(parsed.length).toBeGreaterThan(0);
     expect(parsed.length).toBeLessThan(40);
   });
+
+  it('nested list wrapper keeps elements, not {} (H1)', () => {
+    // A single wrapper key around the payload (the dominant API/tool-response shape) must be
+    // peeled element-by-element, not deleted wholesale — the old fitter emitted `{}` at any budget.
+    const data = {
+      data: Array.from({ length: 100 }, (_, i) => ({
+        id: i,
+        name: `item-${i}`,
+        tag: 'x'.repeat(10),
+      })),
+    };
+    const original = JSON.stringify(data);
+    for (const target of [50, 100, 200, 400]) {
+      const [small, handle] = compress(data, { kind: 'json', targetTokens: target, model: GPT4O });
+      const parsed = JSON.parse(small);
+      expect(small).not.toBe('{}');
+      expect(Array.isArray(parsed.data)).toBe(true);
+      expect(parsed.data.length).toBeGreaterThan(0);
+      expect(tokens.count(small, GPT4O)).toBeLessThanOrEqual(target);
+      expect(handle.expand()).toBe(original);
+    }
+  });
+
+  it('nested dict wrapper recurses (H1)', () => {
+    const results: Record<string, unknown> = {};
+    for (let i = 0; i < 60; i++) results[`k${i}`] = { score: i, text: 'y'.repeat(20) };
+    const [small] = compress({ results }, { kind: 'json', targetTokens: 150, model: GPT4O });
+    const parsed = JSON.parse(small);
+    expect(typeof parsed.results).toBe('object');
+    expect(Object.keys(parsed.results).length).toBeGreaterThan(0);
+    expect(tokens.count(small, GPT4O)).toBeLessThanOrEqual(150);
+  });
+
+  it('non-serializable input raises a friendly error (L4)', () => {
+    // a bigint / function isn't JSON-serializable — a clear compress() error, not silent garbage.
+    expect(() => compress(10n as unknown)).toThrow(/JSON-serializable/);
+    expect(() => compress((() => 1) as unknown)).toThrow(/JSON-serializable/);
+  });
+
+  it('bigger budget keeps at least as many wrapped elements (H1)', () => {
+    const data = {
+      items: Array.from({ length: 80 }, (_, i) => ({ i, text: 'padding text here' })),
+    };
+    const kept = [60, 120, 240].map((target) => {
+      const [small] = compress(data, { kind: 'json', targetTokens: target, model: GPT4O });
+      return JSON.parse(small).items.length;
+    });
+    expect(kept[0]).toBeGreaterThan(0);
+    expect(kept[0]).toBeLessThanOrEqual(kept[1] as number);
+    expect(kept[1]).toBeLessThanOrEqual(kept[2] as number);
+  });
 });
 
 describe('logs compression', () => {

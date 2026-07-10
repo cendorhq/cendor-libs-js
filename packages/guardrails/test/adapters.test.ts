@@ -60,7 +60,20 @@ describe('classifier', () => {
 // --------------------------------------------------------------------------- language
 
 describe('language', () => {
-  it('trips on a disallowed language (BYO detect)', () => {
+  it('defaults to flag (advisory), recording a disallowed language rather than blocking (M3)', () => {
+    // The default action is "flag" — matching the docstring — so a false language-ID cannot
+    // hard-block every call. (Old default was "block".)
+    const out = apply(
+      [rules.language(['en'], { detect: () => 'fr' })],
+      'input',
+      'bonjour le monde',
+    );
+    expect(out.length).toBe(1);
+    expect(out.at(-1)?.action).toBe('flag');
+    expect(out.at(-1)?.reason).toContain("'fr'");
+  });
+
+  it('trips on a disallowed language when action=block (BYO detect)', () => {
     const g = rules.language(['en'], { detect: () => 'fr', action: 'block' });
     let err: unknown;
     try {
@@ -82,14 +95,17 @@ describe('language', () => {
     expect(apply([rules.language(['en'], { detect: () => 'zz' })], 'input', '   ')).toEqual([]);
   });
 
-  it('a missing detector fails closed (blocks) by default', () => {
-    expect(() => apply([rules.language(['en'])], 'input', 'some text')).toThrow(GuardrailTripped);
-  });
-
-  it('a missing detector with fail_open flags instead of blocking', () => {
-    const out = apply([rules.language(['en'], { onError: 'fail_open' })], 'input', 'some text');
+  it('a missing detector with the default (flag) degrades to a flag, not a block (M3)', () => {
+    // No detector -> the check throws; a flagging guardrail's onError is fail_open, so it flags.
+    const out = apply([rules.language(['en'])], 'input', 'some text');
     expect(out.at(-1)?.action).toBe('flag');
     expect(out.at(-1)?.reason).toContain('detector');
+  });
+
+  it('a missing detector with action=block fails closed (blocks)', () => {
+    expect(() =>
+      apply([rules.language(['en'], { action: 'block' })], 'input', 'some text'),
+    ).toThrow(GuardrailTripped);
   });
 });
 

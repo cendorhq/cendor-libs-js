@@ -807,8 +807,15 @@ export function embeddingScorer(
   };
 }
 
-/** Placeholder for the model2vec-backed scorer. No pure-JS static-embedding model ships here; wire
- * your own via {@link embeddingScorer}. */
+/**
+ * **Python-only — not implemented in JS; always throws.** Python's `local_embedding_scorer` is
+ * backed by model2vec static embeddings, for which there is no maintained pure-JS package. This
+ * symbol exists only so the name is discoverable and the failure is a clear, immediate error rather
+ * than a missing export; it is **not** a working scorer. In TS, wire your own embedder via
+ * {@link embeddingScorer} (or {@link openaiEmbeddingScorer}). See the parity matrix.
+ *
+ * @throws {Error} always — pass an `embedFn` to {@link embeddingScorer} instead.
+ */
 export function localEmbeddingScorer(_model = 'minishlab/potion-base-8M'): never {
   throw new Error(
     'localEmbeddingScorer needs a static-embedding model that is not bundled in JS. ' +

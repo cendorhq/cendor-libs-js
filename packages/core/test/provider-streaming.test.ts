@@ -73,6 +73,32 @@ describe('instrument() — provider streaming usage recovery', () => {
     expect(c.metadata.usage_estimated).toBeUndefined();
   });
 
+  it('Gemini streaming: camelCase usageMetadata on the final chunk (H3)', async () => {
+    // The real @google/genai stream carries camelCase usage on the final chunk — must recover it
+    // (not fall to an estimate) just like the non-streaming path.
+    const chunks = [
+      { text: 'par' },
+      { text: 'tial', usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 6 } },
+    ];
+    async function* gen() {
+      for (const ch of chunks) yield ch;
+    }
+    const client = { models: { generateContent: async (_p: unknown) => gen() } };
+    instrument(client);
+    await drain(
+      await client.models.generateContent({
+        model: 'gemini-1.5-pro',
+        contents: 'hi',
+        stream: true,
+      }),
+    );
+    const c = calls[0]!;
+    expect(c.provider).toBe('google');
+    expect(c.usage?.inputTokens).toBe(12);
+    expect(c.usage?.outputTokens).toBe(6);
+    expect(c.metadata.usage_estimated).toBeUndefined(); // real usage recovered, not estimated
+  });
+
   it('Ollama: recovers top-level counts from the final chunk', async () => {
     const chunks = [
       { message: { content: 'par' } },

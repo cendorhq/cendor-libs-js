@@ -15,7 +15,7 @@
  * The judge's own spend is budgeted and audited: make the call through an `instrument()`-ed client
  * and its tokens + cost land in tokenguard / acttrace like any other call.
  */
-import { type Context, Verdict } from './decision.js';
+import { type Context, Verdict, isPromiseLike } from './decision.js';
 
 /** A `respond(system, user)` model callable (sync or async) — returns the assistant's reply string. */
 export type Respond = (system: string, user: string) => string | Promise<string>;
@@ -116,14 +116,18 @@ export function judge(
   respond: Respond,
   policy: string,
   opts: { action?: 'block' | 'redact' | 'flag'; template?: string } = {},
-): (payload: unknown, ctx: Context) => Promise<Verdict | null> {
+): (payload: unknown, ctx: Context) => Verdict | null | Promise<Verdict | null> {
   const action = opts.action ?? 'block';
   const system = verdictPrompt(policy, opts.template ?? DEFAULT_SYSTEM);
   const payloadText = (payload: unknown): string =>
     typeof payload === 'string' ? payload : String(payload);
-  return async (payload: unknown, _ctx: Context): Promise<Verdict | null> => {
-    const reply = await respond(system, payloadText(payload));
-    return parseVerdict(reply, { action });
+  // Stay SYNC when `respond` is synchronous, so the check works with the sync apply() seam; only an
+  // async `respond` (returns a Promise) makes this async (needs evaluateAsync). Mirrors Python.
+  return (payload: unknown, _ctx: Context): Verdict | null | Promise<Verdict | null> => {
+    const reply = respond(system, payloadText(payload));
+    return isPromiseLike<string>(reply)
+      ? reply.then((r) => parseVerdict(r, { action }))
+      : parseVerdict(reply, { action });
   };
 }
 
@@ -205,19 +209,23 @@ function proposedCallText(payload: unknown, ctx: Context): string {
  * *misaligned*. Defaults to `action:'flag'` (advisory). No adherence-rate claim: a BYO judge, only
  * as good as your model + prompt.
  *
- * > 🚧 The `@cendor/sdk` auto-threading of the user turn into `ctx.instruction` is a deferred parity
- * > tail — set `ctx.instruction` yourself until it lands. See docs/guardrails.md "Task adherence".
+ * > `@cendor/sdk` (≥ 0.7.0) auto-threads the user's originating turn into `ctx.instruction`, so under
+ * > the SDK you set nothing; for a standalone (non-SDK) check, set `ctx.instruction` yourself. See
+ * > docs/guardrails.md "Task adherence".
  */
 export function taskAdherence(
   respond: Respond,
   opts: { action?: 'block' | 'redact' | 'flag'; template?: string } = {},
-): (payload: unknown, ctx: Context) => Promise<Verdict | null> {
+): (payload: unknown, ctx: Context) => Verdict | null | Promise<Verdict | null> {
   const action = opts.action ?? 'flag';
   const template = opts.template ?? ADHERENCE_SYSTEM;
-  return async (payload: unknown, ctx: Context): Promise<Verdict | null> => {
+  // Stay SYNC when `respond` is synchronous (mirrors Python) so this attaches to the sync seam.
+  return (payload: unknown, ctx: Context): Verdict | null | Promise<Verdict | null> => {
     const instruction = instructionOf(ctx) || '(no instruction provided)';
     const system = template.replaceAll('{instruction}', instruction);
-    const reply = await respond(system, proposedCallText(payload, ctx));
-    return parseVerdict(reply, { action });
+    const reply = respond(system, proposedCallText(payload, ctx));
+    return isPromiseLike<string>(reply)
+      ? reply.then((r) => parseVerdict(r, { action }))
+      : parseVerdict(reply, { action });
   };
 }

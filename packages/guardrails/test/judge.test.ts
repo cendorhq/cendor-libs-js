@@ -6,7 +6,7 @@
 import { bus } from '@cendor/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Context, GuardrailTripped, Verdict } from '../src/decision.js';
-import { applyAsync, judge, rules } from '../src/index.js';
+import { apply, applyAsync, judge, rules } from '../src/index.js';
 
 beforeEach(() => bus._reset());
 afterEach(() => bus._reset());
@@ -80,6 +80,42 @@ describe('judge helpers', () => {
     await expect(applyAsync([rules.llmJudge(check)], 'output', 'text')).rejects.toBeInstanceOf(
       GuardrailTripped,
     );
+  });
+});
+
+describe('sync judge on the sync seam (M4)', () => {
+  it('rules.llmJudge with a directly-supplied sync callable runs on the sync apply() seam', () => {
+    // Before the fix this threw `TypeError: guardrail "llm_judge" is async` — the check was
+    // hardcoded async even for a synchronous judge.
+    const g = rules.llmJudge((_p: unknown, _c: Context) => new Verdict('block', 'nope'));
+    expect(() => apply([g], 'output', 'text')).toThrow(GuardrailTripped);
+    // a passing sync judge returns no decisions, synchronously (no throw, no Promise)
+    expect(apply([rules.llmJudge(() => null)], 'output', 'text')).toEqual([]);
+  });
+
+  it('judge.judge composed with a sync respond runs on the sync apply() seam', () => {
+    const check = judge.judge(() => '{"trip": true, "reason": "sync block"}', 'Trip on anything.');
+    let err: unknown;
+    try {
+      apply([rules.llmJudge(check)], 'output', 'text');
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(GuardrailTripped);
+    expect((err as GuardrailTripped).decisions.at(-1)?.reason).toBe('sync block');
+  });
+
+  it('judge.taskAdherence with a sync respond runs on the sync apply() seam', () => {
+    const check = judge.taskAdherence(() => MISALIGNED); // defaults to flag
+    const g = rules.llmJudge(check, { stage: 'tool_call', action: 'flag' });
+    const out = apply([g], 'tool_call', { path: '/' }, tcCtx('Book a flight.', 'delete_all', {}));
+    expect(out.at(-1)?.action).toBe('flag');
+    expect(out.at(-1)?.reason).toContain('unrelated');
+  });
+
+  it('an async judge still requires evaluateAsync (throws on the sync path)', () => {
+    const g = rules.llmJudge(async () => new Verdict('block', 'x'));
+    expect(() => apply([g], 'output', 'text')).toThrow(/is async/);
   });
 });
 

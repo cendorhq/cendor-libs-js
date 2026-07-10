@@ -236,6 +236,13 @@ export function compress(content: unknown, opts: CompressOptions = {}): [string,
   if (typeof content === 'string') {
     original = content;
   } else {
+    const t = typeof content;
+    if (content === undefined || t === 'bigint' || t === 'function' || t === 'symbol') {
+      const got = content === undefined ? 'undefined' : t;
+      throw new ValueError(
+        `compress() takes a string or a JSON-serializable object/array; got ${got}, which cannot be encoded as JSON.`,
+      );
+    }
     original = dumps(content);
     if (kind === 'auto') kind = 'json';
   }
@@ -307,32 +314,69 @@ function cpLen(s: string): number {
   return n;
 }
 
+function isNonEmpty(v: JVal): v is JVal[] | Map<string, JVal> {
+  if (v instanceof Map) return v.size > 0;
+  return Array.isArray(v) && v.length > 0;
+}
+
+/** Deep-clone a `JVal` tree so `peelOne` never mutates the caller's value (scalars are immutable). */
+function cloneJson(v: JVal): JVal {
+  if (v instanceof Map) {
+    const out = new Map<string, JVal>();
+    for (const [k, val] of v) out.set(k, cloneJson(val));
+    return out;
+  }
+  if (Array.isArray(v)) return v.map(cloneJson);
+  return v;
+}
+
+/**
+ * Remove one structural unit from `obj` **in place**, returning `true` if anything was removed
+ * (`false` for an un-peelable scalar / empty container). Descends through single-child wrappers, so
+ * a payload nested under one key (`{"data":[…]}` / `{"results":{…}}`) is peeled element-by-element
+ * instead of being deleted wholesale (which used to collapse the whole thing to `{}`). Dicts drop
+ * the largest-valued key; lists drop the trailing element (keeping a valid chronological prefix).
+ */
+function peelOne(obj: JVal): boolean {
+  if (obj instanceof Map && obj.size > 0) {
+    if (obj.size === 1) {
+      const key = obj.keys().next().value as string;
+      const val = obj.get(key) as JVal;
+      if (isNonEmpty(val) && peelOne(val)) return true;
+      obj.delete(key); // sole key wraps a scalar / now-empty container — drop it (→ {})
+      return true;
+    }
+    // largest-valued key; first max on ties (insertion order), mirroring Python's max().
+    let biggest: string | undefined;
+    let bestLen = -1;
+    for (const [k, v] of obj) {
+      const len = cpLen(dumps(v));
+      if (len > bestLen) {
+        bestLen = len;
+        biggest = k;
+      }
+    }
+    obj.delete(biggest as string);
+    return true;
+  }
+  if (Array.isArray(obj) && obj.length > 0) {
+    const tail = obj[obj.length - 1] as JVal;
+    if (obj.length === 1 && isNonEmpty(tail) && peelOne(tail)) return true;
+    obj.pop();
+    return true;
+  }
+  return false;
+}
+
 function fitJson(obj: JVal, target: number, model: string): [string, boolean] {
   let small = dumps(obj);
   if (tokens.count(small, model) <= target) return [small, false];
-
-  if (obj instanceof Map) {
-    const kept = new Map(obj);
-    // sort keys by minified-value length, largest first; stable (ties keep insertion order).
-    const decorated = [...obj.keys()].map((k, idx) => ({
-      k,
-      idx,
-      len: cpLen(dumps(obj.get(k) as JVal)),
-    }));
-    decorated.sort((a, b) => b.len - a.len || a.idx - b.idx);
-    for (const { k } of decorated) {
-      if (tokens.count(dumps(kept), model) <= target) break;
-      kept.delete(k);
-    }
-    small = dumps(kept);
-    if (tokens.count(small, model) <= target) return [small, true];
-  } else if (Array.isArray(obj)) {
-    const keptList = [...obj];
-    while (keptList.length > 0 && tokens.count(dumps(keptList), model) > target) keptList.pop();
-    small = dumps(keptList);
-    if (tokens.count(small, model) <= target) return [small, true];
+  const kept = cloneJson(obj); // never mutate the caller's value
+  while (tokens.count(dumps(kept), model) > target && peelOne(kept)) {
+    // peel one unit per iteration until it fits or nothing is left to drop
   }
-
+  small = dumps(kept);
+  if (tokens.count(small, model) <= target) return [small, true];
   // last resort: a single giant scalar/leaf — prefix-cut (may not parse; documented).
   return [truncateToTokens(small, target, model), true];
 }

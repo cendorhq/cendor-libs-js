@@ -699,7 +699,10 @@ export class Context {
     const after = kept.reduce((a, t) => a + this.contentTokens(turnContent(t)), 0);
     let action: string;
     let note: string;
-    if (k === 0) {
+    if (n === 0) {
+      action = 'kept'; // empty history: nothing to place, nothing dropped
+      note = '';
+    } else if (k === 0) {
       action = 'dropped';
       note = `history: dropped all ${n} turns (no room)`;
     } else if (k < n) {

@@ -43,7 +43,10 @@ describe('reasoning guard', () => {
     expect(() => budget({ usd: 0.01, onExceed: 'clamp' })).toThrow(/clamp/);
   });
 
-  it('clamp injects a provider ceiling when the budget runs low', async () => {
+  it('clamp always injects a ceiling bounding each call (M1)', async () => {
+    // M1: clamp must ALWAYS hand the provider a max_completion_tokens ceiling = the tokens left in
+    // the budget — even a call that looks small pre-flight — so a surprise-long completion can't
+    // overshoot. (Old bug: with headroom no ceiling was injected and the call ran uncapped.)
     const seen: Record<string, unknown>[] = [];
     const client = openai(
       {
@@ -54,25 +57,43 @@ describe('reasoning guard', () => {
       seen,
     );
     await withBudget({ tokens: 1000, onExceed: 'clamp' }, async () => {
-      // Call 1 is comfortably under the cap → untouched; spends ~950 of the 1000.
       await client.chat.completions.create({
         model: 'gpt-4o',
         messages: [{ role: 'user', content: 'hi' }],
       });
-      // Call 2 would breach → clamp injects max_completion_tokens instead of blocking.
       await client.chat.completions.create({
         model: 'gpt-4o',
         messages: [{ role: 'user', content: 'hi' }],
       });
     });
 
+    const rows = clamps();
+    expect(rows.length).toBe(2); // BOTH calls capped server-side (not only the one that runs low)
+    expect(rows.every((r) => r.kwarg === 'max_completion_tokens')).toBe(true);
+    // First call: ceiling ~= full remaining budget minus the tiny input, and it reached the client.
+    expect(seen[0]!.max_completion_tokens).toBe(rows[0]!.limit);
+    expect(rows[0]!.limit).toBeGreaterThan(0);
+    expect(rows[0]!.limit).toBeLessThanOrEqual(1000);
+    // Second call: budget mostly spent → a much tighter ceiling.
+    expect(seen[1]!.max_completion_tokens).toBe(rows[1]!.limit);
+    expect(rows[1]!.limit).toBeLessThan(rows[0]!.limit);
+  });
+
+  it('clamp caps a single oversized call even with headroom (M1)', async () => {
+    // The finding's exact repro: a budget with plenty of headroom and one tiny-looking call that
+    // returns far more than the 256-token reserve — clamp still injects a ceiling <= the budget.
+    const seen: Record<string, unknown>[] = [];
+    const client = openai({ prompt_tokens: 5, completion_tokens: 5 }, seen);
+    await withBudget({ tokens: 1200, onExceed: 'clamp' }, async () => {
+      await client.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+    });
     expect(clamps().length).toBe(1);
-    const row = clamps()[0]!;
-    expect(row.kwarg).toBe('max_completion_tokens');
-    expect(row.limit).toBeGreaterThan(0);
-    expect(row.limit).toBeLessThan(1000);
-    expect('max_completion_tokens' in seen[0]!).toBe(false); // first call untouched
-    expect(seen[1]!.max_completion_tokens).toBe(row.limit); // ceiling reached the provider
+    const injected = seen[0]!.max_completion_tokens as number | undefined;
+    expect(injected).not.toBeUndefined();
+    expect(injected!).toBeLessThanOrEqual(1200);
   });
 
   it('clamp falls back to a block on an unsupported provider', async () => {

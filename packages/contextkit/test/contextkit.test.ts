@@ -423,6 +423,17 @@ describe('contextkit', () => {
     expect(ctx.report().decisions[0]!.action).toBe('kept');
   });
 
+  it('empty history block reports kept, not "dropped all 0 turns" (L5)', async () => {
+    const ctx = new Context({ budgetTokens: 1000, model: 'gpt-4o' });
+    ctx.add(new Block({ messages: [], priority: 5 }));
+    await ctx.assemble();
+    const hist = ctx.report().decisions.filter((d) => d.role === 'history');
+    for (const d of hist) {
+      expect(d.action).toBe('kept');
+      expect(d.note).not.toContain('dropped all 0');
+    }
+  });
+
   it('history block orders in the middle', async () => {
     const ctx = new Context({ budgetTokens: 1000, model: 'gpt-4o' });
     ctx.add(new Block('the question', { priority: 9, pin: true, role: 'user' }));

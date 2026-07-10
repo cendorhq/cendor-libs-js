@@ -83,8 +83,8 @@ export interface Context {
   toolArgs?: unknown;
   /**
    * The user's originating instruction/intent for the run, when the caller knows it. An alignment
-   * check (`judge.taskAdherence`) compares a proposed tool call against it. Empty by default; a
-   * standalone check ignores it. (`@cendor/sdk` auto-threading is a deferred parity tail — 🚧.)
+   * check (`judge.taskAdherence`) compares a proposed tool call against it. Empty by default. Under
+   * `@cendor/sdk` (≥ 0.7.0) the runner auto-threads the user's turn here; a standalone check sets it.
    */
   instruction?: string;
   traceId?: string;
@@ -93,6 +93,17 @@ export interface Context {
 
 /** A check: given the payload + `Context`, return a `Verdict` to trip or `null` to pass (sync or async). */
 export type Check = (payload: unknown, ctx: Context) => Verdict | null | Promise<Verdict | null>;
+
+/**
+ * Runtime thenable check. Lets a BYO-callable adapter (`rules.llmJudge`, `judge.*`) build a **sync**
+ * guardrail check when its supplied callable returns synchronously — usable with the sync
+ * `apply()`/`install()`/`scoped()` seam — and an async one only when it returns a Promise (JS has no
+ * `iscoroutinefunction`, so this inspects the actual return value; more robust than checking the
+ * function type, and matches Python's sync-when-sync behavior).
+ */
+export function isPromiseLike<T = unknown>(v: unknown): v is Promise<T> {
+  return v != null && typeof (v as { then?: unknown }).then === 'function';
+}
 
 /** A named check bound to one or more stages. Build with `defineGuardrail` or a `rules.*` factory. */
 export interface Guardrail {

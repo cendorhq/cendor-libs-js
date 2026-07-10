@@ -38,7 +38,8 @@ describe('instrument() — provider breadth', () => {
 
   it('Gemini legacy: model id read from the bound object (.model), "models/" stripped', async () => {
     // The legacy @google/generative-ai GenerativeModel binds the model to the object, not the call —
-    // instrument() reads it so the LLMCall carries a real, priceable model id.
+    // instrument() reads it so the LLMCall carries a real, priceable model id. This shape reports
+    // snake_case usage keys, still read via the H3 fallback.
     const client = {
       model: 'models/gemini-1.5-pro',
       generateContent: async (_contents: unknown) => ({
@@ -53,6 +54,34 @@ describe('instrument() — provider breadth', () => {
     expect(c.usage?.inputTokens).toBe(40);
     expect(c.usage?.outputTokens).toBe(20);
     expect(c.cost).not.toBeNull(); // gemini-1.5-pro is in the snapshot
+  });
+
+  it('Gemini @google/genai: camelCase usageMetadata captures usage + cost (H3)', async () => {
+    // The real @google/genai Client returns camelCase usage (usageMetadata.promptTokenCount/…) and
+    // the model rides the call arg. Regression: the google branch read Python snake_case only, so
+    // usage/cost came back null on the actual JS SDK shape.
+    const client = {
+      models: {
+        generateContent: async (_p: unknown) => ({
+          usageMetadata: {
+            promptTokenCount: 15,
+            candidatesTokenCount: 8,
+            thoughtsTokenCount: 4,
+          },
+        }),
+      },
+    };
+    instrument(client);
+    await client.models.generateContent({ model: 'gemini-2.5-pro', contents: 'hello' });
+    const c = calls[0]!;
+    expect(c.provider).toBe('google');
+    expect(c.model).toBe('gemini-2.5-pro');
+    expect(c.usage).not.toBeNull();
+    expect(c.usage?.inputTokens).toBe(15);
+    // thinking tokens fold into the output total: 8 candidates + 4 thoughts = 12
+    expect(c.usage?.outputTokens).toBe(12);
+    expect(c.usage?.reasoningTokens).toBe(4);
+    expect(c.cost).not.toBeNull(); // gemini-2.5-pro is in the snapshot
   });
 
   it('Ollama: chat() callable detected, top-level counts read, local model priced at 0', async () => {

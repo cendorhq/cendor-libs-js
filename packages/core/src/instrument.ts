@@ -564,13 +564,20 @@ function extractUsage(response: unknown, provider: string): Usage | null {
   let inp: unknown;
   let out: unknown;
   if (provider === 'google') {
-    // Usage lives under `usage_metadata`. Gemini reports thinking-model reasoning under
-    // `thoughts_token_count`, *separate* from `candidates_token_count`; both bill as output, so fold
-    // thoughts into the output total (else reasoning models under-count) and surface as reasoning.
-    const meta = get(response, 'usage_metadata');
-    inp = get(meta, 'prompt_token_count');
-    reasoning = (get(meta, 'thoughts_token_count', 0) as number) || 0;
-    out = ((get(meta, 'candidates_token_count', 0) as number) || 0) + reasoning;
+    // The real `@google/genai` JS SDK returns **camelCase** usage (`usageMetadata.promptTokenCount`
+    // /`candidatesTokenCount`/`thoughtsTokenCount`); the Python `google-genai` SDK uses snake_case
+    // (`usage_metadata.prompt_token_count`/…). Read camelCase first and fall back to snake_case so
+    // both cross-SDK shapes capture (mirrors the bedrock branch's camelCase keys). Gemini reports
+    // thinking-model reasoning under `thoughtsTokenCount`, *separate* from `candidatesTokenCount`;
+    // both bill as output, so fold thoughts into the output total (else reasoning models
+    // under-count) and surface it as reasoning.
+    const meta = get(response, 'usageMetadata') ?? get(response, 'usage_metadata');
+    inp = get(meta, 'promptTokenCount') ?? get(meta, 'prompt_token_count');
+    reasoning =
+      ((get(meta, 'thoughtsTokenCount') ?? get(meta, 'thoughts_token_count', 0)) as number) || 0;
+    out =
+      (((get(meta, 'candidatesTokenCount') ?? get(meta, 'candidates_token_count', 0)) as number) ||
+        0) + reasoning;
   } else if (provider === 'ollama') {
     // Token counts are top-level on the response.
     inp = get(response, 'prompt_eval_count');

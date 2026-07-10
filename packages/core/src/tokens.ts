@@ -1,8 +1,10 @@
 /**
  * Provider-aware token counting, the TS mirror of `cendor.core.tokens`. Uses `js-tiktoken` (pure JS,
- * no WASM) so counts are exact for OpenAI models and a close BPE proxy (`o200k_base`) for Claude/
- * Gemini. `js-tiktoken` is a hard dependency here, so the "heuristic" tier only ever appears if an
- * encoding genuinely fails to load; it is kept for parity and edge-case robustness.
+ * no WASM) so counts are exact for OpenAI models (fine-tunes map to their base model's encoding) and
+ * a close BPE proxy (`o200k_base`) for Claude/Gemini **and every other non-OpenAI or unrecognized
+ * model** (llama/mistral/deepseek/qwen, new o-series ids, hosted open weights). `js-tiktoken` is a
+ * hard dependency here, so the "heuristic" tier only ever appears if an encoding genuinely fails to
+ * load; it is kept for parity and edge-case robustness.
  */
 import { type Tiktoken, type TiktokenModel, encodingForModel, getEncoding } from 'js-tiktoken';
 import type { Message } from './types.js';
@@ -52,7 +54,7 @@ function tiktokenEncoding(model: string): Tiktoken | null {
   const cached = encCache.get(model);
   if (cached) return cached;
   try {
-    const enc = encodingForModel(model as TiktokenModel);
+    const enc = encodingForModel(baseModel(model) as TiktokenModel);
     encCache.set(model, enc);
     return enc;
   } catch {
@@ -65,7 +67,7 @@ function openaiEncodingIsNative(model: string): boolean {
   if (cached !== undefined) return cached;
   let native: boolean;
   try {
-    encodingForModel(model as TiktokenModel);
+    encodingForModel(baseModel(model) as TiktokenModel);
     native = true;
   } catch {
     native = false;
@@ -74,17 +76,34 @@ function openaiEncodingIsNative(model: string): boolean {
   return native;
 }
 
-/** Tokenizer family for a model id (substring matches handle Bedrock-style prefixed ids). */
+// OpenAI reasoning ("o-series") ids: an `o` followed by a digit — `o1`/`o3`/`o4`/`o5`/…. Anchored,
+// so `ollama`/`olmo` (no digit after `o`) don't match. Kept general so a future o-series id
+// (`o5-mini`, `o6`) is recognized as OpenAI instead of silently falling through to `default`.
+const OSERIES = /^o\d/;
+
+/**
+ * Normalize a fine-tuned OpenAI id to its base model: `ft:<base>:<org>::<id>` → `<base>`. Fine-tunes
+ * use the base model's tokenizer, so they should count exactly under the base encoding. Non-`ft:`
+ * ids are returned unchanged.
+ */
+function baseModel(model: string): string {
+  if (model.toLowerCase().startsWith('ft:')) {
+    const parts = model.split(':');
+    if (parts.length >= 2 && parts[1]) return parts[1];
+  }
+  return model;
+}
+
+/** Tokenizer family for a model id (substring matches handle Bedrock-style prefixed ids; an `ft:`
+ * fine-tune wrapper is unwrapped to its base model first). */
 export function family(model: string): TokenizerFamily {
-  const m = model.toLowerCase();
+  const m = baseModel(model).toLowerCase();
   if (
     m.startsWith('gpt') ||
-    m.startsWith('o1') ||
-    m.startsWith('o3') ||
-    m.startsWith('o4') ||
     m.startsWith('chatgpt') ||
     m.startsWith('text-') ||
-    m.startsWith('davinci')
+    m.startsWith('davinci') ||
+    OSERIES.test(m)
   ) {
     return 'openai';
   }
@@ -115,7 +134,8 @@ export function method(model: string): 'registered' | 'exact' | 'bpe-estimate' |
     if (tiktokenEncoding(model) === null) return 'heuristic';
     return openaiEncodingIsNative(model) ? 'exact' : 'bpe-estimate';
   }
-  if ((fam === 'anthropic' || fam === 'google') && o200k() !== null) return 'bpe-estimate';
+  // anthropic / google / default: the o200k BPE proxy when tiktoken is present, else heuristic.
+  if (o200k() !== null) return 'bpe-estimate';
   return 'heuristic';
 }
 
@@ -165,14 +185,15 @@ function countText(text: string, fam: TokenizerFamily, model: string): number {
   if (!text) return 0;
   if (fam === 'openai') {
     const enc = tiktokenEncoding(model);
-    if (enc) return enc.encode(text).length;
-  } else if (fam === 'anthropic' || fam === 'google') {
-    const enc = o200k();
-    if (enc) return enc.encode(text).length;
-    return subwordEstimate(text);
+    if (enc) return enc.encode(text).length; // exact (or the o200k proxy for an unknown OpenAI id)
+    // js-tiktoken failed to load — the defensive char heuristic (never a normal install).
+    return Math.ceil(text.length / (CHARS_PER_TOKEN.openai ?? 4.0));
   }
-  const cpt = CHARS_PER_TOKEN[fam] ?? CHARS_PER_TOKEN.default ?? 4.0;
-  return Math.ceil(text.length / cpt);
+  // anthropic / google / default: the o200k BPE proxy — a real tokenizer beats a char heuristic
+  // for the whole non-OpenAI class (Claude/Gemini + llama/mistral/deepseek/hosted open weights).
+  const enc = o200k();
+  if (enc) return enc.encode(text).length;
+  return subwordEstimate(text);
 }
 
 function subwordEstimate(text: string): number {

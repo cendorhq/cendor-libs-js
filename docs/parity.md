@@ -47,7 +47,7 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 | cassette `local_embedding_scorer` (bundled model2vec) | ✅ | **Py-only** | no JS static-embedding package exists; TS uses the BYO `embeddingScorer(embedFn)` / `openaiEmbeddingScorer` seam instead |
 | cassette storage | fs | fs + memory (+ IndexedDB-shaped) | pluggable adapters |
 | **acttrace** chain/verify/sign | ✅ | ✅ | JS-written chain `verify()`s in Python (HMAC + `_meta`) |
-| acttrace detectors | ✅ regex **+ Presidio NER** | ✅ regex/pattern (20 detectors + validators) **+ NER** | 🚧 NER via optional `compromise` (English-only, sync, lighter than Presidio — not parity); `nerAvailable()` reports presence |
+| acttrace detectors | ✅ regex **+ Presidio NER** (the `[ner]` extra + a `spacy download` model) | ✅ regex/pattern (20 detectors + validators) **+ NER** | 🚧 NER via optional `compromise` (English-only, sync, lighter than Presidio — not parity); `nerAvailable()` reports presence. Python's `[ner]` extra installs Presidio + spaCy but not a language model — install one (`python -m spacy download en_core_web_sm`); `ner_available()` reflects both and `ner_redactor()` raises a clear error if the model is missing |
 | acttrace storage | fs | fs + memory | pluggable adapters |
 
 ## Runtime targets (TS)

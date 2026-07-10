@@ -169,12 +169,14 @@ export interface LanguageOptions {
  * the "Threat model".
  *
  * `detect(text) -> isoCode` is **bring-your-own**: the TS port bundles no language detector (adding
- * one would be a heavy dependency), so `detect` is required. Without it the check throws a clear
- * error, which the guardrail's `onError` policy turns into a block (default) or flag. Language ID on
- * short/mixed text is unreliable — keep this advisory (`action: 'flag'`) unless you control the input.
+ * one would be a heavy dependency), so `detect` is required. Language ID on short/mixed text is
+ * unreliable, so this defaults to **advisory** (`action: 'flag'`) — keep it that way unless you
+ * control the input distribution. Footgun of `action: 'block'`: with no `detect` the check throws,
+ * and a blocking guardrail's `onError` defaults to fail-closed, so *every* call would be blocked;
+ * wire `detect` before switching to `block`.
  */
 export function language(allowed: Iterable<string>, opts: LanguageOptions = {}): Guardrail {
-  const { detect, stage = 'input', action = 'block', name = 'language', timeout, onError } = opts;
+  const { detect, stage = 'input', action = 'flag', name = 'language', timeout, onError } = opts;
   const allow = new Set([...allowed].map((a) => a.toLowerCase()));
   const defaultDetect = (_text: string): string => {
     throw new Error(

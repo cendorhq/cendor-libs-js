@@ -343,14 +343,15 @@ export function _preflightInterceptor(call: unknown): unknown {
 
 /**
  * Inject a provider output ceiling so a single call can't exceed the remaining token budget.
- * Requires a `tokens=` cap; a no-op when comfortably under; falls back to a hard block when it
- * would breach but no ceiling can be injected safely (unknown provider, or no room even for input).
+ * Requires a `tokens=` cap. It **always** injects the ceiling — set to the tokens left in the
+ * budget after the projected input — so even a call that looks small pre-flight can't overshoot on
+ * a surprise-long completion (the reserve heuristic guards only `block`/`downgrade`, never `clamp`).
+ * A caller's own tighter cap is respected; the only fall-back to a hard block is when the input
+ * alone already exceeds the budget (no output room) or the provider can't take an injected ceiling.
  */
 function clamp(call: LLMCall, frame: Frame): Reroute | null {
   if (frame.capTokens === null) return null;
   const projectedInput = tokens.count(call.messages, call.model);
-  const projOutput = _projectedOutput(call, frame.outputReserve, frame.reasoningReserve);
-  if (frame.spentTokens + projectedInput + projOutput <= frame.capTokens) return null;
   const allowance = frame.capTokens - frame.spentTokens - projectedInput;
   const kwarg = CLAMP_KWARG[call.provider];
   if (kwarg === undefined || allowance <= 0) {

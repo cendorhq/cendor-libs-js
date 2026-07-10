@@ -14,6 +14,7 @@ import {
   type Guardrail,
   type OnError,
   Verdict,
+  isPromiseLike,
   normalizeStages,
   validateExecutionPolicy,
 } from './decision.js';
@@ -505,7 +506,15 @@ export function llmJudge(
   opts: LlmJudgeOptions = {},
 ): Guardrail {
   const { stage = 'output', action = 'block', name = 'llm_judge' } = opts;
-  const check: Check = async (payload, ctx) => coerce(await judge(payload, ctx), action);
+  // Build a SYNC check when the supplied judge is synchronous (mirrors Python's iscoroutinefunction
+  // branch), so an LLM judge attaches to the sync apply()/install()/scoped() seam; only an async
+  // judge (returns a Promise) requires evaluateAsync.
+  const check: Check = (payload, ctx) => {
+    const result = judge(payload, ctx);
+    return isPromiseLike<Verdict | boolean | string | null>(result)
+      ? result.then((r) => coerce(r, action))
+      : coerce(result, action);
+  };
   return mkGuardrail(name, stage, check, {
     timeout: opts.timeout,
     onError: resolveOnError(action, opts.onError),

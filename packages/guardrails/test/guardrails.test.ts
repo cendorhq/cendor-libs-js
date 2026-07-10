@@ -70,6 +70,29 @@ function makeClient(
   };
 }
 
+/** Chat Completions streamed delta chunks + a final usage-only chunk (empty choices). */
+function streamChunks(...words: string[]): unknown[] {
+  const chunks: unknown[] = words.map((w) => ({ choices: [{ delta: { content: w } }] }));
+  chunks.push({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  return chunks;
+}
+
+function streamClient(chunks: unknown[]) {
+  const completions = {
+    create(_kwargs: Record<string, unknown>) {
+      async function* gen() {
+        for (const ch of chunks) yield ch;
+      }
+      return gen();
+    },
+  };
+  return instrument({ chat: { completions } }) as {
+    chat: {
+      completions: { create: (k: Record<string, unknown>) => Promise<AsyncIterable<unknown>> };
+    };
+  };
+}
+
 // --------------------------------------------------------------------------- decision types
 
 describe('types', () => {
@@ -249,6 +272,39 @@ describe('install', () => {
     expect(calls.n).toBe(1); // post-flight: the call already ran
   });
 
+  it('output subscriber blocks a streamed response (M2)', async () => {
+    // core stores a streamed response's metadata.response as an array of delta chunks. The output
+    // stage must reconstruct the text from the chunks and still block — before the fix it read null
+    // off the array and silently no-oped, delivering the banned text.
+    const client = streamClient(streamChunks('the ', 'secret ', 'plan'));
+    install([rules.keywordDeny(['secret'], { stage: 'output', action: 'block' })]);
+    await expect(
+      (async () => {
+        const stream = await client.chat.completions.create({
+          model: 'gpt-4o',
+          messages: msgs('hi'),
+          stream: true,
+        });
+        for await (const _chunk of stream) {
+          // consuming finalizes the stream -> emits -> output stage reconstructs + blocks
+        }
+      })(),
+    ).rejects.toThrow(GuardrailTripped);
+  });
+
+  it('output subscriber passes a clean streamed response (M2)', async () => {
+    const client = streamClient(streamChunks('a ', 'perfectly ', 'fine ', 'answer'));
+    install([rules.keywordDeny(['secret'], { stage: 'output', action: 'block' })]);
+    const stream = await client.chat.completions.create({
+      model: 'gpt-4o',
+      messages: msgs('hi'),
+      stream: true,
+    });
+    for await (const _chunk of stream) {
+      // no throw expected — no banned text in the reconstructed output
+    }
+  });
+
   it('uninstall removes the interceptor + subscriber', async () => {
     const calls = { n: 0 };
     const client = makeClient(calls);
@@ -276,5 +332,32 @@ describe('output extraction', () => {
     expect(responseText(call({ message: { content: 'ollama' } }))).toBe('ollama');
     expect(responseText(call({ text: 'gemini' }))).toBe('gemini');
     expect(responseText(call({ mystery: 1 }))).toBeNull();
+  });
+
+  it('reconstructs streamed delta chunks (array response) — M2', async () => {
+    const { responseText } = await import('../src/index.js');
+    // Chat Completions deltas
+    expect(
+      responseText(
+        call([
+          { choices: [{ delta: { content: 'the ' } }] },
+          { choices: [{ delta: { content: 'secret' } }] },
+          { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+        ]),
+      ),
+    ).toBe('the secret');
+    // Anthropic content_block_delta events
+    expect(
+      responseText(
+        call([
+          { type: 'content_block_delta', delta: { text: 'hel' } },
+          { type: 'content_block_delta', delta: { text: 'lo' } },
+        ]),
+      ),
+    ).toBe('hello');
+    // Gemini text chunks
+    expect(responseText(call([{ text: 'ge' }, { text: 'mini' }]))).toBe('gemini');
+    // empty stream -> null
+    expect(responseText(call([]))).toBeNull();
   });
 });

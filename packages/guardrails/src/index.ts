@@ -439,15 +439,60 @@ function get(obj: unknown, name: string): unknown {
     : undefined;
 }
 
-/** Best-effort assistant text off a completed LLMCall for the standalone output stage. */
+/** Best-effort assistant text off a completed LLMCall for the standalone output stage. For a
+ * **streamed** call `@cendor/core` stores the raw delta chunks as an array here, so the completed
+ * text is reconstructed by joining the per-chunk deltas — otherwise the output stage silently
+ * no-ops on streamed responses (the banned text is delivered). */
 export function responseText(call: LLMCall): string | null {
   const response = call.metadata?.response;
   if (response == null) return null;
   try {
+    if (Array.isArray(response)) {
+      // a streamed call: core stored the raw delta chunks
+      const text = response.map(chunkText).join('');
+      return text || null;
+    }
     return extractText(response);
   } catch {
     return null; // extraction must never break the passthrough
   }
+}
+
+/** Text carried by one streamed delta chunk, across providers. A chunk matches exactly one provider
+ * shape, so trying each and joining reconstructs the full assistant text. Mirrors `@cendor/core`'s
+ * internal per-provider stream-delta join (kept local — guardrails imports only core's public
+ * surface). */
+function chunkText(chunk: unknown): string {
+  // OpenAI / HuggingFace Chat Completions: choices[].delta.content
+  const choices = get(chunk, 'choices');
+  if (Array.isArray(choices) && choices.length > 0) {
+    const parts = choices
+      .map((c) => get(get(c, 'delta'), 'content'))
+      .filter((t): t is string => typeof t === 'string');
+    if (parts.length > 0) return parts.join('');
+  }
+  // OpenAI Responses API: response.output_text.delta events carry incremental text
+  if (get(chunk, 'type') === 'response.output_text.delta') {
+    const delta = get(chunk, 'delta');
+    return typeof delta === 'string' ? delta : '';
+  }
+  // Anthropic: content_block_delta events with delta.text
+  if (get(chunk, 'type') === 'content_block_delta') {
+    const t = get(get(chunk, 'delta'), 'text');
+    return typeof t === 'string' ? t : '';
+  }
+  // Ollama: message.content
+  const message = get(chunk, 'message');
+  if (message != null) {
+    const t = get(message, 'content');
+    if (typeof t === 'string') return t;
+  }
+  // Gemini: chunk.text
+  const text = get(chunk, 'text');
+  if (typeof text === 'string') return text;
+  // Bedrock Converse: contentBlockDelta.delta.text
+  const bt = get(get(get(chunk, 'contentBlockDelta'), 'delta'), 'text');
+  return typeof bt === 'string' ? bt : '';
 }
 
 function extractText(response: unknown): string | null {
