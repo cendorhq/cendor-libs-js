@@ -46,9 +46,30 @@ function ensureLoaded(): Table {
   return table;
 }
 
+// Wire-level id decorations stripped at LOOKUP time (the table keys stay bare). Alpha-only dotted
+// prefixes cover Bedrock vendor/region namespaces (`anthropic.`, `us.anthropic.`) without touching
+// in-name dots like `gpt-4.1` / `gemini-2.5-pro` (those have digits adjacent to the dot).
+const PROVIDER_PREFIX_RE = /^(?:[a-z]+\.)+/;
+const BEDROCK_VERSION_RE = /-v\d+(?::\d+)?$/; // trailing `-v1:0` / `-v2`
+const DATE_SUFFIX_RE = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/; // `-20260115` / `-2025-11-13`
+
+/**
+ * Reduce a wire-level model id to a bare table key, e.g.
+ * `us.anthropic.claude-sonnet-4-6-20260115-v1:0` → `claude-sonnet-4-6` and
+ * `gpt-5.1-2025-11-13` → `gpt-5.1`. Applied only when the exact id misses the table.
+ */
+function lookupId(mid: string): string {
+  let s = normalizeModelId(mid);
+  s = s.replace(PROVIDER_PREFIX_RE, '');
+  s = s.replace(BEDROCK_VERSION_RE, '');
+  s = s.replace(DATE_SUFFIX_RE, '');
+  return ALIASES[s] ?? s;
+}
+
 function ratesFor(model: string): Rates {
   const models = ensureLoaded().models ?? {};
-  const r = models[model];
+  // Bedrock/dated/prefixed ids price like their base model; normalization never invents a price.
+  const r = models[model] ?? models[lookupId(model)];
   if (r === undefined) throw new UnknownModelError(model);
   return r;
 }

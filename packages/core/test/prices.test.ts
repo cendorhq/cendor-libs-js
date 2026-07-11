@@ -56,6 +56,29 @@ describe('prices — cross-language conformance (prices/1)', () => {
     expect(prices.estimate('llama3', 1000, { outputTokens: 1000 }).amount.isZero()).toBe(true);
   });
 
+  it('lookup normalizes wire-level ids (Bedrock prefixes, -vN:0, date suffixes)', () => {
+    const base = prices.estimate('claude-sonnet-4-6', 1000, { outputTokens: 500 });
+    for (const wire of [
+      'anthropic.claude-sonnet-4-6-v1:0',
+      'us.anthropic.claude-sonnet-4-6-20260115-v1:0',
+      'claude-sonnet-4-6-20260115',
+    ]) {
+      expect(prices.estimate(wire, 1000, { outputTokens: 500 }).amount.equals(base.amount)).toBe(
+        true,
+      );
+    }
+    const gpt51 = prices.estimate('gpt-5.1', 1000, { outputTokens: 500 });
+    expect(
+      prices.estimate('gpt-5.1-2025-11-13', 1000, { outputTokens: 500 }).amount.equals(
+        gpt51.amount,
+      ),
+    ).toBe(true);
+    // Normalization never invents a price: decorated unknowns still throw.
+    expect(() => prices.estimate('us.anthropic.claude-nonexistent-v1:0', 100)).toThrow(
+      UnknownModelError,
+    );
+  });
+
   it('sources() lists the built-in live adapters', () => {
     expect(prices.sources()).toEqual(['azure', 'litellm', 'openrouter']);
   });
