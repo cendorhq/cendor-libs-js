@@ -118,7 +118,7 @@ written by the other. No network, no API keys.
 
 | What | Verifiable claim |
 |---|---|
-| Token counting (`js-tiktoken`) | **exact** tiktoken numbers — the same counts as Python's `tiktoken` |
+| Token counting (`js-tiktoken`) | **exact** tiktoken numbers for the mapped OpenAI families (gpt-4o / gpt-4.1 / o-series) — the same counts as Python's `tiktoken`; gpt-5.x counts via the o200k BPE proxy until a mapping ships |
 | Money | **decimal, never an IEEE float** — `decimal.js` mirroring Python's `Decimal`; compared by exact value |
 | Cassette replay | a **Python-recorded cassette replays in JS** (and vice-versa) — same request hashes, same `cassette/2` file |
 | Audit chain | a **JS-written hash chain `verify()`s in Python** — identical canonical bytes + HMAC inputs |
