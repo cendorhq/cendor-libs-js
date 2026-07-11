@@ -41,7 +41,7 @@ describe('instrument() — provider breadth', () => {
     // instrument() reads it so the LLMCall carries a real, priceable model id. This shape reports
     // snake_case usage keys, still read via the H3 fallback.
     const client = {
-      model: 'models/gemini-1.5-pro',
+      model: 'models/gemini-2.5-pro',
       generateContent: async (_contents: unknown) => ({
         usage_metadata: { prompt_token_count: 40, candidates_token_count: 20 },
       }),
@@ -50,10 +50,10 @@ describe('instrument() — provider breadth', () => {
     await client.generateContent('hello'); // positional string, no model arg — comes from the object
     const c = calls[0]!;
     expect(c.provider).toBe('google');
-    expect(c.model).toBe('gemini-1.5-pro');
+    expect(c.model).toBe('gemini-2.5-pro');
     expect(c.usage?.inputTokens).toBe(40);
     expect(c.usage?.outputTokens).toBe(20);
-    expect(c.cost).not.toBeNull(); // gemini-1.5-pro is in the snapshot
+    expect(c.cost).not.toBeNull(); // gemini-2.5-pro is in the snapshot
   });
 
   it('Gemini @google/genai: camelCase usageMetadata captures usage + cost (H3)', async () => {

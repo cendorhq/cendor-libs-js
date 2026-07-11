@@ -41,7 +41,9 @@ def gen_prices() -> None:
         {"model": "claude-opus-4-8", "input": 2000, "output": 1000, "cached": 500, "cache_write": 300},
         {"model": "claude-haiku-4-5", "input": 100, "output": 50, "cached": 25},
         {"model": "gemini-2.5-pro", "input": 4096, "output": 1024, "cached": 1000},
-        {"model": "gemini-2.0-flash", "input": 500, "output": 500},  # no cached rate
+        {"model": "claude-fable-5", "input": 2000, "output": 1000, "cached": 500, "cache_write": 300},
+        {"model": "gpt-5.6-terra", "input": 1000, "output": 500, "cached": 200},
+        {"model": "grok-4.3", "input": 500, "output": 500},  # no cached rate
         {"model": "o3", "input": 3000, "output": 900},
         {"model": "llama3", "input": 1000, "output": 1000},  # zero rates
         {"model": "gpt-4-turbo", "input": 777, "output": 333, "cache_write": 50},  # no cache_write rate

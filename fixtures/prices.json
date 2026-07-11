@@ -1,14 +1,22 @@
 {
   "spec": "prices/1",
-  "snapshotDate": "2026-06-26",
+  "snapshotDate": "2026-07-11",
   "models": [
+    "claude-fable-5",
     "claude-haiku-4-5",
+    "claude-mythos-5",
+    "claude-opus-4-5",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
     "claude-opus-4-8",
     "claude-sonnet-4-6",
-    "gemini-1.5-pro",
-    "gemini-2.0-flash",
+    "claude-sonnet-5",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-pro-preview",
+    "gemini-3.5-flash",
     "gpt-3.5-turbo",
     "gpt-4-turbo",
     "gpt-4.1",
@@ -16,6 +24,19 @@
     "gpt-4.1-nano",
     "gpt-4o",
     "gpt-4o-mini",
+    "gpt-5.1",
+    "gpt-5.2",
+    "gpt-5.3-codex",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    "gpt-5.5",
+    "gpt-5.5-pro",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "grok-4.3",
+    "grok-4.5",
     "llama3",
     "o1",
     "o1-mini",
@@ -115,10 +136,10 @@
       "cachedTokens": 25,
       "cacheWriteTokens": 0,
       "cost": {
-        "amount": "0.00026200",
+        "amount": "0.00032750",
         "currency": "USD"
       },
-      "costStr": "0.00026200 USD"
+      "costStr": "0.00032750 USD"
     },
     {
       "model": "gemini-2.5-pro",
@@ -127,22 +148,46 @@
       "cachedTokens": 1000,
       "cacheWriteTokens": 0,
       "cost": {
-        "amount": "0.0144225000",
+        "amount": "0.0142350000",
         "currency": "USD"
       },
-      "costStr": "0.0144225000 USD"
+      "costStr": "0.0142350000 USD"
     },
     {
-      "model": "gemini-2.0-flash",
+      "model": "claude-fable-5",
+      "inputTokens": 2000,
+      "outputTokens": 1000,
+      "cachedTokens": 500,
+      "cacheWriteTokens": 300,
+      "cost": {
+        "amount": "0.0692500",
+        "currency": "USD"
+      },
+      "costStr": "0.0692500 USD"
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "inputTokens": 1000,
+      "outputTokens": 500,
+      "cachedTokens": 200,
+      "cacheWriteTokens": 0,
+      "cost": {
+        "amount": "0.009550000",
+        "currency": "USD"
+      },
+      "costStr": "0.009550000 USD"
+    },
+    {
+      "model": "grok-4.3",
       "inputTokens": 500,
       "outputTokens": 500,
       "cachedTokens": 0,
       "cacheWriteTokens": 0,
       "cost": {
-        "amount": "0.000250000",
+        "amount": "0.0018750000",
         "currency": "USD"
       },
-      "costStr": "0.000250000 USD"
+      "costStr": "0.0018750000 USD"
     },
     {
       "model": "o3",

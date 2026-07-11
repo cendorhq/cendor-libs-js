@@ -26,10 +26,10 @@ describe('instrument() — google-genai SDK', () => {
       },
     };
     instrument(client);
-    await client.models.generateContent({ model: 'gemini-1.5-pro', contents: 'hello' });
+    await client.models.generateContent({ model: 'gemini-2.5-pro', contents: 'hello' });
     const c = calls[0]!;
     expect(c.provider).toBe('google');
-    expect(c.model).toBe('gemini-1.5-pro'); // read from the model arg (no bound object)
+    expect(c.model).toBe('gemini-2.5-pro'); // read from the model arg (no bound object)
     expect(c.usage?.inputTokens).toBe(40);
     expect(c.usage?.outputTokens).toBe(20);
     expect(c.cost).not.toBeNull();
