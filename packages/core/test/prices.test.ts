@@ -69,9 +69,9 @@ describe('prices — cross-language conformance (prices/1)', () => {
     }
     const gpt51 = prices.estimate('gpt-5.1', 1000, { outputTokens: 500 });
     expect(
-      prices.estimate('gpt-5.1-2025-11-13', 1000, { outputTokens: 500 }).amount.equals(
-        gpt51.amount,
-      ),
+      prices
+        .estimate('gpt-5.1-2025-11-13', 1000, { outputTokens: 500 })
+        .amount.equals(gpt51.amount),
     ).toBe(true);
     // Normalization never invents a price: decorated unknowns still throw.
     expect(() => prices.estimate('us.anthropic.claude-nonexistent-v1:0', 100)).toThrow(
