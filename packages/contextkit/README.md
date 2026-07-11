@@ -61,7 +61,8 @@ blocks), `'truncate'` (cut to fit, `keep: 'head' | 'tail'`, with a `[truncated]`
 
 ## Parity note
 
-Faithful port of `cendor.contextkit` 1.0.1: identical public symbols (`snake_case` → `camelCase`,
+Faithful port of `cendor.contextkit` (versions are independent across languages — the
+[parity matrix](https://cendor.ai/docs/languages) is the contract): identical public symbols (`snake_case` → `camelCase`,
 kwargs → options objects), identical defaults, **byte-identical string-literal values**
 (`'drop_oldest'`, `'attention'`, the `…[truncated]` markers with U+2026), and the `BudgetError`
 name. Two deliberate adaptations:

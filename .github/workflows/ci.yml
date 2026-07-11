@@ -9,6 +9,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The default GITHUB_TOKEN needs only checkout — least privilege for a public repo.
+permissions:
+  contents: read
+
 jobs:
   build-test:
     runs-on: ubuntu-latest

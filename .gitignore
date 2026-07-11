@@ -10,3 +10,6 @@ coverage/
 
 # transient pack artifact for the cendor-sdk-js temp guardrails override (dropped at release)
 *.tgz
+
+# Python tooling cache (ruff sometimes runs here via editors/scripts)
+.ruff_cache/

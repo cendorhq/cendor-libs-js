@@ -63,8 +63,9 @@ map), `'truncate'` (degrade gracefully — resolves to `undefined`), or a callab
 ## Parity note
 
 Behavior, defaults, string-enum values, error names, report/sink/downgrade/clamp row keys, and the
-OTel metric names are a faithful port of the Python `cendor.tokenguard` v1.1.1. Adaptations for the
-async, single-threaded TS runtime:
+OTel metric names are a faithful port of the Python `cendor.tokenguard` (versions are independent
+across languages — the [parity matrix](https://cendor.ai/docs/languages) is the contract).
+Adaptations for the async, single-threaded TS runtime:
 
 - Python `contextvars` → two `node:async_hooks` `AsyncLocalStorage` scopes (`track`/`budget`
   propagate across `await`, not across worker threads — the same caveat as contextvars vs. OS
