@@ -37,7 +37,7 @@ Streaming, the Responses API, Anthropic, interceptors (record/replay), and `Rero
 
 | Symbol | Notes |
 |---|---|
-| `instrument(client)` | wraps OpenAI (Chat + Responses) / Anthropic clients; idempotent; async + streaming |
+| `instrument(client)` | wraps OpenAI (Chat + Responses + Embeddings, since 0.6.0) / Anthropic clients; idempotent; async + streaming |
 | `instrumentTool(fn)` | emits a `ToolCall` per invocation |
 | `Money`, `Usage`, `LLMCall`, `ToolCall` | the cross-language event vocabulary (`events/1`) |
 | `bus` | `subscribe` / `unsubscribe` / `emit` |

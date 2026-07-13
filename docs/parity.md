@@ -17,10 +17,13 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 | `Usage` / `LLMCall` / `ToolCall` | ✅ | ✅ | field names snake_case ↔ camelCase; type names identical |
 | Event bus | ✅ | ✅ | subscribe/emit/unsubscribe; error isolation + re-raise first |
 | Price table + `estimate()` | ✅ | ✅ | decimal-exact; same bundled snapshot; `refresh()` async in TS |
-| `prices.register()` | ✅* | ✅ | *Py registers via core's loaded table; TS adds a public seam |
+| `prices.register()` | ✅* | ✅ | *Py registers via core's contractual `prices._register` hook (the SDK's `register_model_price` writes through it); TS's seam is public. Registrations **survive `refresh()`** in both (≥ 1.6.0 / 0.6.0) |
 | Token counting | ✅ | ✅ | `tiktoken` ↔ `js-tiktoken` — exact counts match |
 | `instrument()` providers | ✅ 6 (OpenAI, Anthropic, HuggingFace, google-genai, Bedrock, Ollama) | ✅ 6 (OpenAI, Anthropic, HuggingFace, google-genai, Bedrock, Ollama) | Bedrock JS auto-detects a boto-shaped `converse()`; aws-sdk-v3 rides the SDK provider |
+| `instrument()` embeddings capture | ✅ (≥ 1.6.0) | ✅ (≥ 0.6.0) | openai-shaped `embeddings.create` (OpenAI + Azure): `metadata.embedding`, pre-flight interceptors apply (budget block / guard redact-before-send maps back to the raw `input` shape); the snapshot prices `text-embedding-*` |
 | `instrument()` streaming / interceptors / `Reroute` | ✅ | ✅ | |
+| `Usage` arithmetic | ✅ `Usage.__add__` / `sum_usage` | ✅ `sumUsage` | field-complete by construction — a new `Usage` field can't silently vanish from aggregates |
+| **acttrace** dual-shape `guard` + `resolve_findings` | ✅ (≥ 1.5.0) | ✅ (≥ 0.6.0) | the raw interceptor is also the scope form (`with guard(...):` / `guard(opts, fn)`); `resolve_findings`/`resolveFindings` export guard's per-category action resolution for composers |
 | core `otel` spans / `ingest()` | ✅ | ✅ | `span()` + `ingest()`; `@opentelemetry/api` optional peer — span is a no-op without it |
 | LangChain `CendorCallbackHandler` | ✅ | ✅ | `@cendor/core/langchain`; recording-only in both; reads `usage_metadata`, correlates by root-run `traceId` |
 | `trace()` correlation | ✅ contextvars | ✅ | AsyncLocalStorage-injectable; ambient fallback |
@@ -69,4 +72,8 @@ Bedrock), zod tool schemas, sessions (better-sqlite3 + memory adapters), handoff
 parallel, structured outputs, incremental single- + multi-agent streaming, the v1.1 surface (progress
 hooks, prompt caching, live OTel spans), plus MCP tool loading, checkpoint/resume, A2A server/client,
 and the Foundry Bot-Framework adapter. Usage capture for HuggingFace/Ollama/Gemini/Bedrock rides
-`@cendor/core`'s provider detection (released together).
+`@cendor/core`'s provider detection (released together). Since 1.7.0 / 0.10.0 the SDK↔lib
+inheritance is CI-verified in both languages: `guard` is the identical acttrace object, the SDK
+`rules` namespace carries the full library catalogue (TS gained spotlight + the detection-tier
+adapters + the similarity checks), `embed()` is governed pre-flight, and a parity/identity test
+suite pins every re-export so drift fails the build.

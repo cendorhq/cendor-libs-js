@@ -59,7 +59,8 @@ const [ok, detail] = verify('audit.jsonl'); // re-walk offline; catches any edit
 | `verify(path, { key?, expectedHead?, expectEntries? })` | `[ok, detail]`. Never throws. Detects tamper / bad-sig / reorder / truncation. |
 | `frameworks()` | `['eu_ai_act', 'gdpr', 'iso_42001', 'nist_rmf']`. |
 | `scan(obj, policy?)` / `redact(obj, policy?)` | Pure detection (counts only) / scrub. `Policy.default/gdpr/pci/strict`. |
-| `guard(policy?, audit?, onBlock?)` | Interceptor for `addInterceptor`: block (throw) / redact-before-send (`Reroute`) / flag. `PolicyViolation.findings`. |
+| `guard(policy?, audit?, onBlock?)` — dual-shape since 0.6.0: also `guard(opts, fn)` scope form | Interceptor for `addInterceptor`, or install/remove around `fn`: block (throw) / redact-before-send (`Reroute`) / flag. `PolicyViolation.findings`. |
+| `resolveFindings(findings, policy?)` | guard's per-category action resolution, exported for composers: `{ block, redact, flag }`. |
 | `DETECTORS`, `registerDetector`, `detectors`, `Detector` | The 20-detector registry (validators: Luhn / IBAN mod-97 / Verhoeff / ABA / SSN / phone / BIC). |
 | `enableLocalePack('uk'\|'in')`, `enableEntropyDetector()`, `LOCALE_PACKS` | Opt-in packs (off by default). |
 | `nerAvailable()` / `nerRedactor()` | Optional NER via the `compromise` peer dep: `nerAvailable()` reports presence; `nerRedactor()` returns a working name/place/org redactor when installed, else throws a clear install hint (English-only, lighter than Presidio — not parity). |
