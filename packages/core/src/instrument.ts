@@ -100,6 +100,13 @@ function findTargets(client: unknown): Target[] {
   if (responses && typeof responses.create === 'function') {
     targets.push([responses, 'create', 'openai_responses']);
   }
+  // OpenAI-shaped embeddings endpoint (OpenAI + Azure-via-openai). Wrapping it closes the
+  // embeddings capture gap: pre-flight interceptors (budget block/clamp, guard redaction) run, and
+  // the emitted LLMCall carries metadata.embedding = true.
+  const embeddings = c.embeddings as Record<string, unknown> | undefined;
+  if (embeddings && typeof embeddings.create === 'function') {
+    targets.push([embeddings, 'create', 'openai_embeddings']);
+  }
   if (targets.length > 0) return targets;
   const messages = c.messages as Record<string, unknown> | undefined;
   if (messages && typeof messages.create === 'function') {
@@ -134,7 +141,10 @@ function findTargets(client: unknown): Target[] {
   return [];
 }
 
-const PUBLIC_PROVIDER: Record<string, string> = { openai_responses: 'openai' };
+const PUBLIC_PROVIDER: Record<string, string> = {
+  openai_responses: 'openai',
+  openai_embeddings: 'openai',
+};
 function publicProvider(provider: string): string {
   return PUBLIC_PROVIDER[provider] ?? provider;
 }
@@ -235,7 +245,17 @@ function applyReroute(
   Object.assign(kwargs, updates);
   if ('model' in updates) call.model = updates.model as string;
   if (messages !== MISSING) {
-    kwargs[MESSAGES_KWARG[provider] ?? 'messages'] = messages;
+    if (provider === 'openai_embeddings') {
+      // The embeddings endpoint takes raw text(s) on `input`, not message dicts — map the rerouted
+      // messages back to the original input shape (string stays string, list stays list) so e.g. a
+      // guard's redact-before-send sends the provider cleaned text.
+      const msgs = Array.isArray(messages) ? (messages as Message[]) : [];
+      const contents = msgs.map((m) => String(m.content ?? ''));
+      const original = kwargs.input;
+      kwargs.input = typeof original === 'string' && contents.length > 0 ? contents[0] : contents;
+    } else {
+      kwargs[MESSAGES_KWARG[provider] ?? 'messages'] = messages;
+    }
     call.messages = messages as Message[];
   }
   call.metadata.rerouted = true;
@@ -257,6 +277,9 @@ function pre(
     ts: new Date(),
   });
   call.metadata.request_kwargs = kwargs;
+  if (provider === 'openai_embeddings') {
+    call.metadata.embedding = true; // so subscribers can tell embedding calls apart
+  }
   return { call, start: performance.now() };
 }
 
@@ -273,6 +296,20 @@ function extractRequest(
     else if (Array.isArray(inp)) messages = inp as Message[];
     else messages = [];
     return { model: (kwargs.model as string) ?? '', messages };
+  }
+  if (provider === 'openai_embeddings') {
+    // Embeddings API: embeddings.create({ model, input }) — input is a string or a list of
+    // strings. Normalize each text to a message dict so interceptors (guard redaction, budget
+    // projection) see the payload the same way they see chat messages.
+    const inp = kwargs.input;
+    let texts: unknown[];
+    if (typeof inp === 'string') texts = [inp];
+    else if (Array.isArray(inp)) texts = inp;
+    else texts = [];
+    return {
+      model: (kwargs.model as string) ?? '',
+      messages: texts.map((t) => ({ role: 'user', content: t })),
+    };
   }
   if (provider === 'bedrock') {
     // Converse: modelId= (not model=) carries the model; messages= carries the turns.
@@ -603,10 +640,16 @@ function extractUsage(response: unknown, provider: string): Usage | null {
   } else {
     const u = get(response, 'usage');
     if (u === null) return null;
-    if (provider === 'openai' || provider === 'openai_responses' || provider === 'huggingface') {
+    if (
+      provider === 'openai' ||
+      provider === 'openai_responses' ||
+      provider === 'openai_embeddings' ||
+      provider === 'huggingface'
+    ) {
       // Dual-shape: Chat Completions uses prompt_tokens/completion_tokens (+ details); the Responses
       // API uses input_tokens/output_tokens (+ *_tokens_details). HF's chatCompletion returns the
       // Chat Completions shape. Read whichever the response carries so one branch covers all three.
+      // Embeddings responses carry prompt_tokens/total_tokens only (no completion_tokens -> out 0).
       inp = get(u, 'prompt_tokens');
       if (inp == null) inp = get(u, 'input_tokens');
       out = get(u, 'completion_tokens');

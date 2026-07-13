@@ -1,6 +1,6 @@
 {
   "spec": "prices/1",
-  "snapshotDate": "2026-07-11",
+  "snapshotDate": "2026-07-13",
   "models": [
     "claude-fable-5",
     "claude-haiku-4-5",
@@ -42,7 +42,10 @@
     "o1-mini",
     "o3",
     "o3-mini",
-    "o4-mini"
+    "o4-mini",
+    "text-embedding-3-large",
+    "text-embedding-3-small",
+    "text-embedding-ada-002"
   ],
   "cases": [
     {

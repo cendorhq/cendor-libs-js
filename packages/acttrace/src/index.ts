@@ -24,7 +24,7 @@ import {
   scanCounts,
   scrub,
 } from './detectors.js';
-import { PolicyViolation, guard } from './guard.js';
+import { PolicyViolation, guard, resolveFindings } from './guard.js';
 import { hmacSha256Hex, sha256Hex, timingSafeEqualHex } from './hash.js';
 import { nerAvailable, nerRedactor } from './ner.js';
 import { LOCALE_PACKS, enableEntropyDetector, enableLocalePack } from './packs.js';
@@ -42,6 +42,7 @@ export {
   redact,
   guard,
   PolicyViolation,
+  resolveFindings,
   enableLocalePack,
   enableEntropyDetector,
   LOCALE_PACKS,
@@ -49,6 +50,7 @@ export {
   nerRedactor,
 };
 export type { Detector };
+export type { GuardOptions, OnBlock, ResolvedFindings } from './guard.js';
 
 /** The `prev_hash` of the first entry: 64 ASCII zeros. */
 export const GENESIS = '0'.repeat(64);

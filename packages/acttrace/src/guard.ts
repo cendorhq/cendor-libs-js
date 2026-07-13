@@ -2,8 +2,11 @@
  * `guard()` — a batteries-included enforcement callable for `@cendor/core`'s interceptor seam. The
  * TS port of `cendor.acttrace.guard`.
  *
- * The recorder/enforcer split stays intact: acttrace still only *records*. `guard()` returns a plain
- * callable you install via `addInterceptor` — it is core that stops the call. Per call, the active
+ * The recorder/enforcer split stays intact: acttrace still only *records*. `guard()` is
+ * **dual-shape**: `guard(policy, audit?, onBlock?)` returns a plain callable you install via
+ * `addInterceptor` (the raw interceptor form), and `guard(opts, fn)` runs `fn` with the
+ * interceptor installed and removed around it (the scope form — the TS analogue of Python's
+ * `with guard(...):`). Either way it is core that stops the call. Per call, the active
  * {@link Policy} resolves each detected category to an action:
  *
  * - **block** → record `policy_flag(action="blocked")` → **throw** (the call never runs).
@@ -14,10 +17,18 @@
  * - nothing → proceed untouched.
  */
 
-import { LLMCall, MISS, type Miss, Reroute, ToolCall } from '@cendor/core';
+import {
+  LLMCall,
+  MISS,
+  type Miss,
+  Reroute,
+  ToolCall,
+  addInterceptor,
+  removeInterceptor,
+} from '@cendor/core';
 import { scrub } from './detectors.js';
 import type { AuditLog } from './index.js';
-import { type Finding, Policy, scan } from './policy.js';
+import { Finding, Policy, scan } from './policy.js';
 
 /** Severity ordering, so a grouped flag carries the strongest severity in the group. */
 const SEVERITY_RANK: Record<string, number> = { info: 0, warning: 1, critical: 2 };
@@ -78,9 +89,57 @@ function makeBlockException(onBlock: OnBlock, findings: Finding[]): Error {
   return onBlock(findings);
 }
 
+/** {@link resolveFindings}' return shape — every finding lands in exactly one bucket. */
+export interface ResolvedFindings {
+  block: Finding[];
+  redact: Finding[];
+  flag: Finding[];
+}
+
 /**
- * Return a pre-call interceptor that enforces `policy` and records refusals via `audit`. Install it
- * on core's seam via `addInterceptor(guard(Policy.gdpr(), log))`.
+ * Partition findings by their policy-effective action — `guard()`'s own resolution, exported.
+ * The TS twin of Python's `resolve_findings`.
+ *
+ * With `policy` given, each finding's action is **re-resolved** against it via `Policy.actionFor`
+ * (category → group → default, most specific wins) — so findings scanned under one policy can be
+ * enforced under another. Without it, each {@link Finding}'s already-resolved `action` is used
+ * as-is. Any action other than `block`/`redact` resolves to `flag`.
+ *
+ * @example
+ * ```ts
+ * import { Policy, resolveFindings, scan } from '@cendor/acttrace';
+ * const groups = resolveFindings(scan('card 4111 1111 1111 1111'), Policy.pci());
+ * if (groups.block.length > 0) {
+ *   // any block-tier finding: refuse the payload
+ * }
+ * ```
+ */
+export function resolveFindings(findings: Finding[], policy?: Policy | null): ResolvedFindings {
+  const groups: ResolvedFindings = { block: [], redact: [], flag: [] };
+  for (const f of findings) {
+    let action = policy ? policy.actionFor(f.category, f.group) : f.action;
+    if (action !== 'block' && action !== 'redact' && action !== 'flag') action = 'flag';
+    const finding =
+      action === f.action ? f : new Finding(f.category, f.group, f.severity, action, f.count);
+    groups[action as keyof ResolvedFindings].push(finding);
+  }
+  return groups;
+}
+
+/** Options for {@link guard}'s scope form — matches the SDK's `guard(opts, fn)` call shape. */
+export interface GuardOptions {
+  policy?: Policy | null;
+  audit?: AuditLog | null;
+  onBlock?: OnBlock;
+}
+
+/**
+ * Enforce a {@link Policy} on core's interceptor seam — **dual-shape**.
+ *
+ * `guard(policy, audit?, onBlock?)` returns the raw pre-call interceptor (install it yourself via
+ * `addInterceptor`; it gates nothing until installed). `guard(opts, fn)` is the **scope form**: it
+ * installs the interceptor, runs `fn`, and removes it on the way out (exception-safe) — the TS
+ * analogue of Python's `with guard(...):`.
  *
  * Note that `Policy.default()` never blocks — use `Policy.gdpr()` / `pci()` / `strict()` (or a custom
  * policy) to make a category `block`. `audit` is optional — without it the guard still enforces.
@@ -90,13 +149,50 @@ function makeBlockException(onBlock: OnBlock, findings: Finding[]): Error {
  * import { addInterceptor } from '@cendor/core';
  * import { guard, Policy, AuditLog } from '@cendor/acttrace';
  * const audit = new AuditLog('support');
+ * // scope form — enforce for the callback only:
+ * await guard({ policy: Policy.gdpr(), audit }, async () => {
+ *   // instrumented calls in here are gated
+ * });
+ * // raw interceptor form — install/remove yourself:
  * addInterceptor(guard(Policy.gdpr(), audit));
  * ```
  */
 export function guard(
   policy?: Policy | null,
   audit?: AuditLog | null,
+  onBlock?: OnBlock,
+): (call: unknown) => unknown;
+export function guard<T>(opts: GuardOptions, fn: () => Promise<T> | T): Promise<T>;
+export function guard<T>(
+  a?: Policy | GuardOptions | null,
+  b?: AuditLog | null | (() => Promise<T> | T),
   onBlock: OnBlock = PolicyViolation,
+): ((call: unknown) => unknown) | Promise<T> {
+  if (typeof b === 'function') {
+    // scope form: guard(opts, fn) — install around fn, remove on the way out.
+    const opts = (a ?? {}) as GuardOptions;
+    const interceptor = buildInterceptor(
+      opts.policy ?? null,
+      opts.audit ?? null,
+      opts.onBlock ?? PolicyViolation,
+    );
+    const fn = b as () => Promise<T> | T;
+    return (async () => {
+      addInterceptor(interceptor);
+      try {
+        return await fn();
+      } finally {
+        removeInterceptor(interceptor);
+      }
+    })();
+  }
+  return buildInterceptor((a as Policy | null | undefined) ?? null, b ?? null, onBlock);
+}
+
+function buildInterceptor(
+  policy: Policy | null,
+  audit: AuditLog | null,
+  onBlock: OnBlock,
 ): (call: unknown) => unknown {
   const p = policy ?? Policy.default();
   const auditLog = audit ?? null;
@@ -116,9 +212,8 @@ export function guard(
     if (c === null) return MISS;
     const findings = scan(c, p);
     if (findings.length === 0) return MISS;
-    const blocked = findings.filter((f) => f.action === 'block');
-    const toRedact = findings.filter((f) => f.action === 'redact');
-    const flagged = findings.filter((f) => f.action === 'flag');
+    // the one shared per-category resolution
+    const { block: blocked, redact: toRedact, flag: flagged } = resolveFindings(findings);
     if (blocked.length > 0) {
       record('blocked', blocked, call); // record the refusal *before* throwing
       throw makeBlockException(onBlock, blocked);

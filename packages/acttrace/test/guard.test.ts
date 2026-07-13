@@ -284,3 +284,96 @@ it('ignores non-call events', () => {
   expect(g({})).toBe(MISS);
   expect(g(new LLMCall({ id: 'x', provider: 'openai', model: 'm', messages: [] }))).toBe(MISS);
 });
+
+// --- dual-shape guard (0.6.0): scope form + resolveFindings -------------------------------------
+
+describe('guard scope form (guard(opts, fn))', () => {
+  it('installs for the callback and removes after (exactly once, enforcement scoped)', async () => {
+    const calls = { n: 0 };
+    const c = client(calls);
+
+    await expect(
+      guard({ policy: Policy.pci() }, async () => {
+        await c.chat.completions.create({
+          model: 'gpt-4o',
+          messages: msgs('card 4111 1111 1111 1111'),
+        });
+      }),
+    ).rejects.toBeInstanceOf(PolicyViolation);
+    expect(calls.n).toBe(0); // blocked while scoped
+
+    // enforcement is really gone after the scope
+    await c.chat.completions.create({
+      model: 'gpt-4o',
+      messages: msgs('card 4111 1111 1111 1111'),
+    });
+    expect(calls.n).toBe(1);
+  });
+
+  it('removes the interceptor when the callback throws a non-policy error', async () => {
+    const calls = { n: 0 };
+    const c = client(calls);
+
+    await expect(
+      guard({ policy: Policy.pci() }, async () => {
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
+
+    await c.chat.completions.create({
+      model: 'gpt-4o',
+      messages: msgs('card 4111 1111 1111 1111'),
+    });
+    expect(calls.n).toBe(1); // no leftover enforcement
+  });
+
+  it('returns the callback result and records on the audit log', async () => {
+    const path = tmpFile();
+    const audit = new AuditLog('s', { path });
+    const calls = { n: 0 };
+    const c = client(calls);
+
+    const out = await guard({ policy: Policy.gdpr(), audit }, async () => {
+      await c.chat.completions.create({
+        model: 'gpt-4o',
+        messages: msgs('email bob@acme.com'),
+      });
+      return 42;
+    });
+    audit.detach();
+
+    expect(out).toBe(42);
+    expect(calls.n).toBe(1); // redact-before-send proceeds
+    const flags = audit.entries.filter((e) => e.type === 'policy_flag');
+    expect(flags.length).toBe(1);
+    expect(payloadOf(flags[0]).action).toBe('redacted');
+  });
+
+  it('raw interceptor form is unchanged (shape pin)', () => {
+    const g = guard(Policy.strict());
+    expect(typeof g).toBe('function');
+    expect(g({})).toBe(MISS); // callable without installation, exactly as before
+  });
+});
+
+describe('resolveFindings', () => {
+  it('groups findings by their already-resolved actions', async () => {
+    const { resolveFindings, scan } = await import('../src/index.js');
+    const findings = scan('email bob@acme.com card 4111 1111 1111 1111', Policy.gdpr());
+    const groups = resolveFindings(findings);
+    const redacted = new Set(groups.redact.map((f: Finding) => f.category));
+    expect(redacted.has('email')).toBe(true);
+    expect(redacted.has('credit_card')).toBe(true);
+    expect(groups.block.length).toBe(0);
+  });
+
+  it('re-resolves under another policy and re-stamps the action', async () => {
+    const { resolveFindings, scan } = await import('../src/index.js');
+    // scan wide under default (never blocks), enforce under pci (financial -> block)
+    const findings = scan('card 4111 1111 1111 1111', Policy.default());
+    expect(findings.every((f: Finding) => f.action !== 'block')).toBe(true);
+    const groups = resolveFindings(findings, Policy.pci());
+    expect(groups.block.map((f: Finding) => f.category)).toEqual(['credit_card']);
+    expect(groups.block[0].action).toBe('block');
+  });
+});

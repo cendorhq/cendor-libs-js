@@ -131,6 +131,31 @@ export class Usage {
   }
 }
 
+/**
+ * Sum usages **field-complete** — iterates the numeric fields of the `Usage` instances themselves,
+ * so a future `Usage` field can never silently vanish from an aggregate (the enumerated-field bug
+ * class). Empty input returns an all-zero `Usage`. Sits next to {@link sumMoney}; the TS twin of
+ * Python's `sum_usage` / `Usage.__add__`.
+ *
+ * @example
+ * ```ts
+ * import { Usage, sumUsage } from '@cendor/core';
+ * const total = sumUsage([new Usage({ inputTokens: 1200, outputTokens: 300 })]);
+ * ```
+ */
+export function sumUsage(usages: Usage[]): Usage {
+  const totals: Record<string, number> = {};
+  for (const u of usages) {
+    for (const [k, v] of Object.entries(u)) {
+      if (typeof v === 'number') totals[k] = (totals[k] ?? 0) + v;
+    }
+  }
+  return new Usage({
+    ...(totals as unknown as UsageInit),
+    inputTokens: totals.inputTokens ?? 0,
+  });
+}
+
 /** A provider-native chat message (passed through unchanged; not further normalized). */
 export type Message = Record<string, unknown>;
 

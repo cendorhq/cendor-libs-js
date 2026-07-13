@@ -26,6 +26,9 @@ let table: Table | null = null;
 let sourceKind = 'bundled'; // "bundled" | "refreshed"
 let sourceNameValue = 'bundled'; // "bundled" | "litellm" | "openrouter" | "azure" | "custom" | "default"
 let sourceUrlValue: string | null = null;
+/** Programmatic registrations (see {@link register}) — re-applied on top of every loaded or
+ * refreshed table, so a `refresh()` never drops them. */
+const registered: Record<string, Rates> = {};
 
 /** Default static snapshot location used by `refresh()` when no url or source is given. */
 export const SNAPSHOT_URL =
@@ -41,7 +44,10 @@ const ALIASES: Record<string, string> = {};
 
 function ensureLoaded(): Table {
   if (table === null) {
-    table = parseDecimalJson(PRICES_JSON) as unknown as Table;
+    const t = parseDecimalJson(PRICES_JSON) as unknown as Table;
+    if (!t.models) t.models = {};
+    Object.assign(t.models, registered); // re-apply programmatic registrations (see register)
+    table = t;
   }
   return table;
 }
@@ -124,8 +130,10 @@ export interface RegisterRates {
  * Register (or overwrite) a model's **per-token** rates in the active price table, so a model absent
  * from the bundled snapshot (a custom/deployment/Hub id) is costed and USD budgets bind on it.
  * Rates are exact `Decimal`. The higher-level `@cendor/sdk` `registerModelPrice` handles per-1M/1K
- * unit conversion before calling this. Dropped by {@link _reset}. (Python has no `prices.register` —
- * there you register a price with `cendor.sdk.register_model_price(...)`.)
+ * unit conversion before calling this. Registrations **survive `refresh()`** (re-applied after
+ * every table swap, overriding a snapshot entry with the same id); dropped by {@link _reset}.
+ * (Python has no public `prices.register` — there you register a price with
+ * `cendor.sdk.register_model_price(...)`.)
  *
  * @example
  * ```ts
@@ -145,6 +153,7 @@ export function register(model: string, rates: RegisterRates): void {
     r.cache_write =
       rates.cache_write instanceof Dec ? rates.cache_write : new Dec(rates.cache_write);
   }
+  registered[model] = r; // survives refresh(): re-applied after every table swap
   t.models[model] = r;
 }
 
@@ -352,6 +361,7 @@ export async function refresh(url?: string, opts: RefreshOptions = {}): Promise<
     const raw = parseDecimalJson(text);
     const data = adapter ? adapter(raw) : (raw as unknown as Table);
     if (data && typeof data === 'object' && data.models && Object.keys(data.models).length > 0) {
+      Object.assign(data.models, registered); // programmatic registrations survive a refresh
       table = data;
       sourceKind = 'refreshed';
       sourceNameValue = name;
@@ -364,10 +374,11 @@ export async function refresh(url?: string, opts: RefreshOptions = {}): Promise<
   return false;
 }
 
-/** Test helper: drop the loaded table so the bundled snapshot reloads. */
+/** Test helper: drop the loaded table (and registrations) so the bundled snapshot reloads. */
 export function _reset(): void {
   table = null;
   sourceKind = 'bundled';
   sourceNameValue = 'bundled';
   sourceUrlValue = null;
+  for (const k of Object.keys(registered)) delete registered[k];
 }

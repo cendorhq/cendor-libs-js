@@ -77,3 +77,37 @@ describe('Usage — subset conventions', () => {
     expect(usage.totalTokens).toBe(1500);
   });
 });
+
+describe('sumUsage (0.6.0)', () => {
+  it('sums field-complete over the Usage instances own numeric fields', async () => {
+    const { Usage, sumUsage } = await import('../src/index.js');
+    const a = new Usage({
+      inputTokens: 100,
+      outputTokens: 50,
+      cachedTokens: 10,
+      reasoningTokens: 5,
+      cacheWrite: 2,
+    });
+    const b = new Usage({
+      inputTokens: 1,
+      outputTokens: 2,
+      cachedTokens: 3,
+      reasoningTokens: 4,
+      cacheWrite: 5,
+    });
+    const total = sumUsage([a, b]);
+    expect(total.inputTokens).toBe(101);
+    expect(total.outputTokens).toBe(52);
+    expect(total.cachedTokens).toBe(13);
+    expect(total.reasoningTokens).toBe(9);
+    expect(total.cacheWrite).toBe(7);
+    expect(total.totalTokens).toBe(153);
+  });
+
+  it('returns an all-zero Usage for empty input', async () => {
+    const { sumUsage } = await import('../src/index.js');
+    const zero = sumUsage([]);
+    expect(zero.inputTokens).toBe(0);
+    expect(zero.totalTokens).toBe(0);
+  });
+});

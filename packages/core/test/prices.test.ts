@@ -99,3 +99,39 @@ describe('prices — cross-language conformance (prices/1)', () => {
     expect(c.amount.equals(new Dec('3.125'))).toBe(true);
   });
 });
+
+describe('register() survives refresh; embedding rows priced (0.6.0)', () => {
+  beforeEach(() => prices._reset());
+
+  it('re-applies registrations after a successful refresh()', async () => {
+    prices.register('my-fine-tune', { input: '0.000001', output: '0' });
+    const payload = JSON.stringify({
+      _updated: '2099-02-02',
+      models: { 'gpt-4o': { input: 0.002, output: 0 } },
+    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(payload)) as typeof fetch;
+    try {
+      expect(await prices.refresh()).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    // The refreshed table swapped in — but the registration is re-applied, not dropped.
+    expect(prices.estimate('my-fine-tune', 1000).amount.equals(new Dec('0.001'))).toBe(true);
+    expect(prices.estimate('gpt-4o', 1000).amount.equals(new Dec('2'))).toBe(true);
+    prices._reset();
+  });
+
+  it('prices the bundled embedding rows (backs instrument() embeddings capture)', () => {
+    // text-embedding-3-small: $0.02/1M -> 0.00000002/token; 1000 tokens = 0.00002.
+    expect(prices.estimate('text-embedding-3-small', 1000).amount.equals(new Dec('0.00002'))).toBe(
+      true,
+    );
+    expect(prices.estimate('text-embedding-3-large', 1000).amount.equals(new Dec('0.00013'))).toBe(
+      true,
+    );
+    expect(prices.estimate('text-embedding-ada-002', 1000).amount.equals(new Dec('0.0001'))).toBe(
+      true,
+    );
+  });
+});

@@ -3,7 +3,7 @@
  * small and stable. Namespaced modules (`bus`, `tokens`, `prices`, `protocols`) mirror the Python
  * submodules; value types and `instrument()` are top-level.
  */
-export { LLMCall, Money, ToolCall, Usage, sumMoney } from './types.js';
+export { LLMCall, Money, ToolCall, Usage, sumMoney, sumUsage } from './types.js';
 export type { LLMCallInit, Message, ToolCallInit, UsageInit } from './types.js';
 export { Dec, Decimal } from './decimal.js';
 export type { DecimalValue } from './decimal.js';
