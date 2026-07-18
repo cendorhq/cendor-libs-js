@@ -167,6 +167,10 @@ const MESSAGES_KWARG: Record<string, string> = { openai_responses: 'input', goog
  * ```
  */
 export function instrument<T>(client: T): T {
+  // Overrides for targets that live on the client itself but can't be patched in place (see below).
+  // When any exist we return a thin Proxy serving the wrapped fns; otherwise the client is patched in
+  // place and returned unchanged (identity preserved for every normal SDK).
+  const overrides = new Map<string | symbol, unknown>();
   for (const [owner, attr, provider] of findTargets(client)) {
     const fn = owner[attr] as ((...args: unknown[]) => unknown) & { [WRAPPED]?: boolean };
     if (fn[WRAPPED]) continue;
@@ -180,11 +184,47 @@ export function instrument<T>(client: T): T {
       const name = (get(c, 'model') ?? get(c, 'modelName') ?? get(c, '_modelName') ?? '') as string;
       modelDefault = String(name).replace(/^models\//, '');
     }
-    owner[attr] = wrap(
+    const wrapped = wrap(
       fn.bind(owner) as (...args: unknown[]) => Promise<unknown>,
       provider,
       modelDefault,
     );
+    // Patch in place when the property is a writable/configurable own or prototype slot. Some SDKs —
+    // notably @huggingface/inference (InferenceClient defines every task method in its constructor via
+    // `Object.defineProperty(this, name, { value })`, i.e. non-writable AND non-configurable own
+    // properties) — expose a target that no assignment or redefinition can replace. For those we record
+    // the wrapper and serve it from a Proxy; every other client keeps in-place patching + identity, and
+    // a working client is never crashed by a failed patch.
+    const ownsTarget = owner === (client as unknown as Record<string, unknown>);
+    const desc = ownsTarget ? Object.getOwnPropertyDescriptor(owner, attr) : undefined;
+    if (desc && desc.configurable === false && !('value' in desc && desc.writable)) {
+      overrides.set(attr, wrapped);
+      continue;
+    }
+    try {
+      owner[attr] = wrapped;
+    } catch {
+      if (ownsTarget) overrides.set(attr, wrapped);
+      // A read-only slot on a sub-object is unexpected; leave it untouched rather than throw.
+    }
+  }
+  if (overrides.size > 0) {
+    // A Proxy can't override a non-configurable, non-writable own data property on its *target* (the
+    // get trap must return the real value). So proxy over a fresh object carrying the client's
+    // prototype — it has none of those frozen own props — and forward every non-overridden read to the
+    // real client (binding methods to it). instanceof still works (same prototype).
+    const real = client as unknown as Record<string | symbol, unknown>;
+    const target = Object.create(Object.getPrototypeOf(real) as object | null);
+    return new Proxy(target, {
+      get(_t, prop) {
+        if (overrides.has(prop)) return overrides.get(prop);
+        const v = Reflect.get(real, prop, real);
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(real) : v;
+      },
+      has(_t, prop) {
+        return overrides.has(prop) || Reflect.has(real, prop);
+      },
+    }) as T;
   }
   return client;
 }

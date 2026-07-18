@@ -410,6 +410,53 @@ describe('instrument() — interceptors', () => {
   });
 });
 
+describe('instrument() — read-only client (HF InferenceClient shape)', () => {
+  // @huggingface/inference@4 defines every task method in the constructor with
+  // Object.defineProperty(this, name, { value }) — non-writable AND non-configurable own props.
+  // In-place patching throws "Cannot assign to read only property"; instrument() must fall back to a
+  // Proxy that serves the wrapped method (regression for the black-box run 2026-07-18 finding B1).
+  class FakeInferenceClient {
+    accessToken = 'hf_x';
+    constructor() {
+      Object.defineProperty(this, 'chatCompletion', {
+        enumerable: false,
+        value: async (_params: unknown) => ({
+          model: 'Qwen/Qwen2.5-7B-Instruct',
+          choices: [{ message: { role: 'assistant', content: 'pong' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 },
+        }),
+      });
+    }
+  }
+
+  it('does not throw and captures a huggingface LLMCall', async () => {
+    const raw = new FakeInferenceClient();
+    const client = instrument(raw) as FakeInferenceClient & {
+      chatCompletion: (p: unknown) => Promise<{ choices: { message: { content: string } }[] }>;
+    };
+    const res = await client.chatCompletion({
+      model: 'x',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(res.choices[0]!.message.content).toBe('pong');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.provider).toBe('huggingface');
+    expect(calls[0]!.usage?.inputTokens).toBe(5);
+    expect(calls[0]!.usage?.outputTokens).toBe(1);
+    // non-overridden props still reachable through the proxy
+    expect(client.accessToken).toBe('hf_x');
+  });
+
+  it('is idempotent (re-instrument does not double-wrap or crash)', async () => {
+    const client = instrument(new FakeInferenceClient()) as FakeInferenceClient & {
+      chatCompletion: (p: unknown) => Promise<unknown>;
+    };
+    const again = instrument(client) as typeof client;
+    await again.chatCompletion({ model: 'x', messages: [] });
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe('instrumentTool()', () => {
   it('emits a ToolCall for a sync tool', () => {
     const decorate = instrumentTool('search') as (
