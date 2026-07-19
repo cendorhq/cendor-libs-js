@@ -15,3 +15,18 @@ updates:
     groups:
       dev-dependencies:
         dependency-type: development
+    # Deferred majors — see plan/REPORT-TS7-OPENAI6-FEASIBILITY-2026-07-19.md §7.3.
+    # (vitest is deliberately NOT ignored — handled as a manual bump.)
+    ignore:
+      # TS 7: revisit at 7.1 (new compiler API) after ecosystem soak.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # @types/node: track the lowest supported runtime (Node 22), not Node 26.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # biome 2: config-migration major — its own separate decision.
+      - dependency-name: "@biomejs/biome"
+        update-types: ["version-update:semver-major"]
+      # fast-check 4: dev-only property-testing major — its own separate decision.
+      - dependency-name: "fast-check"
+        update-types: ["version-update:semver-major"]
