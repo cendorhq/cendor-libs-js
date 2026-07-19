@@ -65,6 +65,6 @@
     "access": "public"
   },
   "devDependencies": {
-    "@langchain/core": "^1.2.1"
+    "@langchain/core": "^1.2.3"
   }
 }
