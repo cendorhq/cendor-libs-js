@@ -240,6 +240,16 @@ export class QueueSink {
  * `from opentelemetry import metrics`; when the package is absent, `write` is a no-op. The three
  * metric names are byte-identical to the Python original.
  */
+export interface OTelSinkOptions {
+  /**
+   * Dimension the counters by the active `track(...)` tags (feature / user_id / …) as well as
+   * `model`, so a metrics backend can break spend down by attribution. Tag *values* become metric
+   * attributes, so keep them **low-cardinality** (`feature`, `env`, `tenant` — not a raw per-user
+   * id) or your backend's time-series count can explode. Default `true`; set `false` for model-only.
+   */
+  tags?: boolean;
+}
+
 export class OTelSink {
   private tokensCounter: { add: (value: number, attrs: Record<string, unknown>) => void } | null =
     null;
@@ -248,8 +258,10 @@ export class OTelSink {
   private reasoningCounter: {
     add: (value: number, attrs: Record<string, unknown>) => void;
   } | null = null;
+  private readonly emitTags: boolean;
 
-  constructor() {
+  constructor(opts: OTelSinkOptions = {}) {
+    this.emitTags = opts.tags ?? true;
     try {
       const req = createRequire(import.meta.url);
       const otel = req('@opentelemetry/api');
@@ -270,7 +282,17 @@ export class OTelSink {
     ) {
       return; // OTel not installed — silently skip
     }
-    const attrs = { model: entry.model ?? '' };
+    const attrs: Record<string, unknown> = { model: entry.model ?? '' };
+    if (this.emitTags) {
+      // Attribution dimensions: flatten low-cardinality tag values so spend is sliceable by
+      // feature/tenant in the backend. Non-primitive values are stringified.
+      for (const [key, value] of Object.entries(entry.tags ?? {})) {
+        attrs[key] =
+          typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string'
+            ? value
+            : String(value);
+      }
+    }
     // reasoning is a subset of output — reported as its own counter, not added into the total.
     this.tokensCounter.add(Number(entry.input_tokens) + Number(entry.output_tokens), attrs);
     this.reasoningCounter.add(Number(entry.reasoning_tokens ?? 0), attrs);

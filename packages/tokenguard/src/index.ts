@@ -73,6 +73,53 @@ export class UnpricedModelWarning extends Error {
   }
 }
 
+/**
+ * A pre-flight budget action, emitted on the `@cendor/core` bus so `@cendor/acttrace` chains it as a
+ * `budget_event` and an OpenTelemetry mirror can surface it in your APM/SIEM. A blocked call never
+ * reaches the bus as an `LLMCall` (it's refused pre-flight), so this event is the *only* signal that
+ * the breaker fired — exactly the governance action you want to alert on. `action` is `'blocked'` |
+ * `'downgraded'` | `'clamped'`. Money fields are the Decimal rendered as a string; token fields are
+ * numbers. Duck-typed by `acttrace` (no import), like `guardrails`' `GuardrailDecision`.
+ */
+export class BudgetEvent {
+  readonly action: string;
+  readonly reason: string;
+  readonly model: string;
+  readonly toModel: string | null;
+  readonly scope: string | null;
+  readonly projectedUsd: string | null;
+  readonly capUsd: string | null;
+  readonly projectedTokens: number | null;
+  readonly capTokens: number | null;
+  readonly tags: Record<string, unknown>;
+  readonly ts: Date;
+
+  constructor(init: {
+    action: string;
+    reason?: string;
+    model?: string;
+    toModel?: string | null;
+    scope?: string | null;
+    projectedUsd?: string | null;
+    capUsd?: string | null;
+    projectedTokens?: number | null;
+    capTokens?: number | null;
+    tags?: Record<string, unknown>;
+  }) {
+    this.action = init.action;
+    this.reason = init.reason ?? '';
+    this.model = init.model ?? '';
+    this.toModel = init.toModel ?? null;
+    this.scope = init.scope ?? null;
+    this.projectedUsd = init.projectedUsd ?? null;
+    this.capUsd = init.capUsd ?? null;
+    this.projectedTokens = init.projectedTokens ?? null;
+    this.capTokens = init.capTokens ?? null;
+    this.tags = init.tags ?? {};
+    this.ts = new Date();
+  }
+}
+
 /** Internal graceful-degradation signal for `onExceed: 'truncate'`; never escapes a budget. */
 class Truncated extends Error {
   constructor() {
@@ -282,6 +329,37 @@ function projectTokens(call: LLMCall, reserve: number, reasoningReserve = 0): nu
  * `instrument()` only structurally detects openai/anthropic clients, so an "ollama-shaped" client
  * isn't wrapped — this exercises the same clamp-fallback code path).
  */
+/**
+ * Publish a {@link BudgetEvent} on the bus for a pre-flight budget action, so `acttrace` records it
+ * and an OTel mirror can alert on it. Best-effort observability — never gates the action itself.
+ */
+function emitBudgetEvent(
+  action: string,
+  args: {
+    call: LLMCall;
+    frame: Frame;
+    reason: string;
+    projectedUsd?: Decimal;
+    projectedTokens?: number;
+    toModel?: string;
+  },
+): void {
+  bus.emit(
+    new BudgetEvent({
+      action,
+      reason: args.reason,
+      model: args.call.model,
+      toModel: args.toModel ?? null,
+      scope: args.frame.scope,
+      projectedUsd: args.projectedUsd != null ? args.projectedUsd.toString() : null,
+      capUsd: args.frame.capUsd !== null ? args.frame.capUsd.toString() : null,
+      projectedTokens: args.projectedTokens ?? null,
+      capTokens: args.frame.capTokens,
+      tags: { ...currentTags() },
+    }),
+  );
+}
+
 export function _preflightInterceptor(call: unknown): unknown {
   if (!(call instanceof LLMCall)) return MISS;
   const frames = currentFrames();
@@ -302,6 +380,13 @@ export function _preflightInterceptor(call: unknown): unknown {
       }
       if (frame.spentUsd.plus(projected).greaterThan(frame.capUsd)) {
         downgradeRows.push({ from: call.model, to: cheaper, tags: { ...currentTags() } });
+        emitBudgetEvent('downgraded', {
+          call,
+          frame,
+          reason: `projected $${frame.spentUsd.plus(projected)} > cap $${frame.capUsd}; rerouted ${call.model} -> ${cheaper}`,
+          projectedUsd: frame.spentUsd.plus(projected),
+          toModel: cheaper,
+        });
         return new Reroute({ model: cheaper });
       }
     } else if (frame.onExceed === 'clamp') {
@@ -310,9 +395,14 @@ export function _preflightInterceptor(call: unknown): unknown {
     } else if (frame.onExceed === 'block') {
       const projTokens = projectTokens(call, frame.outputReserve, frame.reasoningReserve);
       if (frame.capTokens !== null && frame.spentTokens + projTokens > frame.capTokens) {
-        throw new BudgetExceeded(
-          `pre-flight block: ~${frame.spentTokens + projTokens} tokens would exceed cap ${frame.capTokens} (model=${call.model})`,
-        );
+        const reason = `pre-flight block: ~${frame.spentTokens + projTokens} tokens would exceed cap ${frame.capTokens} (model=${call.model})`;
+        emitBudgetEvent('blocked', {
+          call,
+          frame,
+          reason,
+          projectedTokens: frame.spentTokens + projTokens,
+        });
+        throw new BudgetExceeded(reason);
       }
       if (frame.capUsd !== null) {
         let projected: Decimal;
@@ -321,9 +411,9 @@ export function _preflightInterceptor(call: unknown): unknown {
         } catch (err) {
           if (err instanceof UnknownModelError) {
             if (onUnpriced === 'raise') {
-              throw new BudgetExceeded(
-                `pre-flight block: model=${call.model} has no price, so a USD cap cannot be projected; configure(on_unpriced='raise') rejects unpriced calls (set on_unpriced='warn' to let them through as $0).`,
-              );
+              const reason = `pre-flight block: model=${call.model} has no price, so a USD cap cannot be projected; configure(on_unpriced='raise') rejects unpriced calls (set on_unpriced='warn' to let them through as $0).`;
+              emitBudgetEvent('blocked', { call, frame, reason });
+              throw new BudgetExceeded(reason);
             }
             warnUnpriced(call.model, 'block');
             continue;
@@ -331,9 +421,14 @@ export function _preflightInterceptor(call: unknown): unknown {
           throw err;
         }
         if (frame.spentUsd.plus(projected).greaterThan(frame.capUsd)) {
-          throw new BudgetExceeded(
-            `pre-flight block: projected $${frame.spentUsd.plus(projected)} would exceed cap $${frame.capUsd} (model=${call.model})`,
-          );
+          const reason = `pre-flight block: projected $${frame.spentUsd.plus(projected)} would exceed cap $${frame.capUsd} (model=${call.model})`;
+          emitBudgetEvent('blocked', {
+            call,
+            frame,
+            reason,
+            projectedUsd: frame.spentUsd.plus(projected),
+          });
+          throw new BudgetExceeded(reason);
         }
       }
     }
@@ -355,9 +450,9 @@ function clamp(call: LLMCall, frame: Frame): Reroute | null {
   const allowance = frame.capTokens - frame.spentTokens - projectedInput;
   const kwarg = CLAMP_KWARG[call.provider];
   if (kwarg === undefined || allowance <= 0) {
-    throw new BudgetExceeded(
-      `pre-flight clamp: cannot fit call within the remaining token budget (~${frame.capTokens - frame.spentTokens} left, ~${projectedInput} input; provider='${call.provider}', model=${call.model}) — use on_exceed='block' to reject, or raise the cap`,
-    );
+    const reason = `pre-flight clamp: cannot fit call within the remaining token budget (~${frame.capTokens - frame.spentTokens} left, ~${projectedInput} input; provider='${call.provider}', model=${call.model}) — use on_exceed='block' to reject, or raise the cap`;
+    emitBudgetEvent('blocked', { call, frame, reason, projectedTokens: projectedInput });
+    throw new BudgetExceeded(reason);
   }
   const existingRaw = (call.metadata.request_kwargs as Record<string, unknown> | undefined)?.[
     kwarg
@@ -366,6 +461,12 @@ function clamp(call: LLMCall, frame: Frame): Reroute | null {
   if (existing !== null && existing <= allowance) return null; // caller's own cap already fits
   const target = existing === null ? allowance : Math.min(existing, allowance);
   clampRows.push({ model: call.model, kwarg, limit: target, tags: { ...currentTags() } });
+  emitBudgetEvent('clamped', {
+    call,
+    frame,
+    reason: `injected ${kwarg}=${target} to bound output within the remaining token budget`,
+    projectedTokens: frame.spentTokens + projectedInput + target,
+  });
   return new Reroute({ [kwarg]: target });
 }
 

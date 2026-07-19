@@ -27,6 +27,7 @@ import {
 import { PolicyViolation, guard, resolveFindings } from './guard.js';
 import { hmacSha256Hex, sha256Hex, timingSafeEqualHex } from './hash.js';
 import { nerAvailable, nerRedactor } from './ner.js';
+import { type OTelApi, OTelMirror, loadOtelApi } from './otel.js';
 import { LOCALE_PACKS, enableEntropyDetector, enableLocalePack } from './packs.js';
 import { Finding, Policy, redact, scan } from './policy.js';
 import { PyFloat, type PyValue, canonical, dumpsDefault, parsePreserving } from './pyjson.js';
@@ -48,8 +49,21 @@ export {
   LOCALE_PACKS,
   nerAvailable,
   nerRedactor,
+  OTelMirror,
 };
 export type { Detector };
+export type { AuditMirror };
+
+/**
+ * A destination that receives every chained {@link AuditEntry} in addition to the file — an
+ * operational copy for monitoring/alerting/SIEM (e.g. {@link OTelMirror}). Best-effort: a failing
+ * mirror is swallowed and never breaks the chain, and the file stays the sole `verify()` artifact.
+ */
+interface AuditMirror {
+  write(entry: AuditEntry): void;
+  flush?(): void;
+  close?(): void;
+}
 export type { GuardOptions, OnBlock, ResolvedFindings } from './guard.js';
 
 /** The `prev_hash` of the first entry: 64 ASCII zeros. */
@@ -99,6 +113,7 @@ const CONTROLS: Record<string, Record<string, string[]>> = {
     context_assembly: ['Art.12 logging', 'Art.13 transparency'],
     human_oversight: ['Art.14 human oversight', 'Art.26(5) deployer oversight'],
     policy_flag: ['Art.10 data governance', 'Art.12 record-keeping'],
+    budget_event: ['Art.12 record-keeping', 'Art.72 post-market monitoring'],
   },
   nist_rmf: {
     audit_open: ['GOVERN-1.1'],
@@ -110,6 +125,7 @@ const CONTROLS: Record<string, Record<string, string[]>> = {
     context_assembly: ['MEASURE-2.1'],
     human_oversight: ['MANAGE-2.1'],
     policy_flag: ['MANAGE-2.1', 'MEASURE-2.1'],
+    budget_event: ['MANAGE-2.1', 'MEASURE-2.1'],
   },
   iso_42001: {
     audit_open: ['A.6.2.8 event logs'],
@@ -125,6 +141,7 @@ const CONTROLS: Record<string, Record<string, string[]>> = {
     context_assembly: ['A.6.2.8 event logs', 'A.6.2.6 operation & monitoring'],
     human_oversight: ['A.9.2 responsible use', 'A.9.4 intended use'],
     policy_flag: ['A.7 data for AI systems', 'A.6.2.8 event logs', 'A.9.2 responsible use'],
+    budget_event: ['A.6.2.6 operation & monitoring', 'A.6.2.8 event logs'],
   },
   gdpr: {
     audit_open: ['Art.30 records of processing', 'Art.5(2) accountability'],
@@ -140,6 +157,7 @@ const CONTROLS: Record<string, Record<string, string[]>> = {
       'Art.5(1)(c) data minimisation',
       'Art.30 records of processing',
     ],
+    budget_event: ['Art.30 records of processing'],
   },
 };
 
@@ -383,6 +401,14 @@ export interface AuditLogOptions {
   flagOnRedact?: boolean;
   policy?: Policy | null;
   maxEntries?: number | null;
+  /**
+   * Optional mirror that receives every chained entry in addition to the file — an operational copy
+   * for APM/SIEM (e.g. `new OTelMirror()`). Best-effort: a failing mirror never breaks the chain, and
+   * the file (not the mirror) stays the sole artifact `verify()` checks. If it implements `flush()`/
+   * `close()`, {@link AuditLog.detach} calls them. When `@opentelemetry/api` is present, auto-captured
+   * and explicit entries also carry the active span's `otel_trace_id`/`otel_span_id` for correlation.
+   */
+  mirror?: AuditMirror | null;
   /** Advanced: override the chain storage backend (defaults to fs when `path` is set, else memory). */
   storage?: ChainStorage;
 }
@@ -408,6 +434,8 @@ export class AuditLog {
   private readonly _maxEntries: number | null;
   private readonly _path: string | null;
   private readonly _storage: ChainStorage;
+  private readonly _mirror: AuditMirror | null;
+  private readonly _otelApi: OTelApi | null;
   private _seq = 0;
   private _evictedFromMemory = 0;
   private _head = GENESIS;
@@ -422,6 +450,7 @@ export class AuditLog {
       flagOnRedact = true,
       policy = null,
       maxEntries = null,
+      mirror = null,
       storage,
     } = opts;
     if (maxEntries !== null && maxEntries < 1) {
@@ -435,6 +464,9 @@ export class AuditLog {
     this._redactor = redactor ?? defaultRedactor;
     this._flagOnRedact = flagOnRedact;
     this._path = path;
+    this._mirror = mirror ?? null;
+    // Cache the OTel API once so per-entry correlation stays cheap and is a no-op without OTel.
+    this._otelApi = loadOtelApi();
     if (maxEntries !== null && path === null) {
       process.emitWarning(
         new BoundedMemoryWithoutPathWarning(
@@ -528,12 +560,47 @@ export class AuditLog {
 
   // ------------------------------------------------------------------ chain
 
+  /**
+   * @internal Stamp the active OTel span's trace/span ids onto a payload so an audit entry can be
+   * cross-referenced with an APM trace. No-op if OTel is absent or no valid span is current — so the
+   * default (local-first) chain is byte-identical to before.
+   */
+  private withOtelIds(payload: Record<string, unknown>): Record<string, unknown> {
+    if (this._otelApi === null) return payload;
+    const span = this._otelApi.trace.getActiveSpan?.();
+    const ctx = span?.spanContext();
+    if (ctx === undefined) return payload;
+    const valid =
+      typeof this._otelApi.isSpanContextValid === 'function'
+        ? this._otelApi.isSpanContextValid(ctx)
+        : Boolean(ctx.traceId) && ctx.traceId !== '0'.repeat(32);
+    if (!valid) return payload;
+    const out = { ...payload };
+    if (out.otel_trace_id === undefined) out.otel_trace_id = ctx.traceId;
+    if (out.otel_span_id === undefined) out.otel_span_id = ctx.spanId;
+    return out;
+  }
+
+  /**
+   * @internal Send a chained entry to the optional mirror. Best-effort: a mirror is an operational
+   * copy, so its failure is swallowed and never breaks the tamper-evident chain (the file is truth).
+   */
+  private mirrorWrite(entry: AuditEntry): void {
+    if (this._mirror === null) return;
+    try {
+      this._mirror.write(entry);
+    } catch {
+      // a mirror must never break the audit chain (operational copy, not the evidence)
+    }
+  }
+
   /** @internal Append one chain link. Also invoked by {@link Decision}. */
   _append(etype: string, payload: Record<string, unknown>): AuditEntry {
+    const enriched = this.withOtelIds(payload); // additive correlation ids (no-op without OTel span)
     const seq = this._seq;
     this._seq += 1;
     const ts = this.now();
-    let safe: PyValue = jsonable(payload);
+    let safe: PyValue = jsonable(enriched);
     let autoFlags: AutoFlagRow[] = [];
     if (this._redact) {
       if (this._redactor === defaultRedactor) {
@@ -563,6 +630,9 @@ export class AuditLog {
     this.entries.push(entry);
     this._head = h;
     this._storage.appendLine(`${dumpsDefault(entryToRow(entry))}\n`);
+    // Mirror after the durable write: an operational copy for APM/SIEM, in chain order (this entry,
+    // then any follow-up policy_flags below mirror themselves).
+    this.mirrorWrite(entry);
     // OUTSIDE the "lock": each auto-flag is its own chained policy_flag entry (auto:true), tagged to
     // the active decision. policy_flag is not an auto type, so this never recurses.
     for (const [reason, action, severity, data] of autoFlags) {
@@ -626,13 +696,49 @@ export class AuditLog {
         // policy_version. Duck-typed + json-normalized; empty by default, so it stays compatible.
         metadata: jsonable((e.metadata as unknown) ?? {}),
       });
+    } else if (
+      event !== null &&
+      typeof event === 'object' &&
+      'action' in event &&
+      'projectedUsd' in event &&
+      'capUsd' in event
+    ) {
+      // @cendor/tokenguard BudgetEvent — duck-typed, no import (like the guardrail branch above).
+      const e = event as Record<string, unknown>;
+      this._append('budget_event', {
+        decision_id: did,
+        action: e.action, // 'blocked' | 'downgraded' | 'clamped'
+        reason: e.reason ?? '',
+        model: e.model ?? '',
+        to_model: e.toModel ?? null,
+        scope: e.scope ?? null,
+        projected_usd: e.projectedUsd ?? null,
+        cap_usd: e.capUsd ?? null,
+        projected_tokens: e.projectedTokens ?? null,
+        cap_tokens: e.capTokens ?? null,
+        tags: jsonable((e.tags as unknown) ?? {}),
+      });
     }
   };
 
-  /** Stop subscribing to the core event stream and close the log file handle (idempotent). */
+  /**
+   * Stop subscribing to the core event stream and close the log file handle (idempotent). Also
+   * flushes/closes the optional mirror if it implements those lifecycle methods, so no mirrored tail
+   * is lost at shutdown.
+   */
   detach(): void {
     bus.unsubscribe(this._onEvent);
     this._storage.close();
+    try {
+      this._mirror?.flush?.();
+    } catch {
+      // shutdown of an operational copy is best-effort — never mask a real error
+    }
+    try {
+      this._mirror?.close?.();
+    } catch {
+      // shutdown of an operational copy is best-effort — never mask a real error
+    }
   }
 
   // ------------------------------------------------------------------ explicit events
