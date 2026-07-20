@@ -93,6 +93,51 @@ describe('BudgetEvent', () => {
     });
     expect(events.filter((e) => e instanceof BudgetEvent)).toHaveLength(0);
   });
+
+  it('carries name and description when set (G10)', async () => {
+    const events = capture();
+    const client = makeClient();
+    await expect(
+      withBudget(
+        {
+          usd: 0.01,
+          onExceed: 'block',
+          name: 'per-run cap',
+          description: 'hard ceiling per support run',
+        },
+        async () => {
+          await callN(client, { n: 2 });
+        },
+      ),
+    ).rejects.toThrow(BudgetExceeded);
+    const blocked = events.filter((e) => e.action === 'blocked');
+    expect(blocked[0]?.name).toBe('per-run cap');
+    expect(blocked[0]?.description).toBe('hard ceiling per support run');
+  });
+
+  it('leaves name/description null for an unnamed budget (G10)', async () => {
+    const events = capture();
+    const client = makeClient();
+    await withBudget(
+      { usd: 0.001, onExceed: 'downgrade', downgrade: { 'gpt-4o': 'gpt-4o-mini' } },
+      async () => {
+        await callN(client);
+      },
+    );
+    const dg = events.filter((e) => e.action === 'downgraded');
+    expect(dg[0]?.name).toBeNull();
+    expect(dg[0]?.description).toBeNull();
+  });
+
+  it('the G15 counter increment never throws without OpenTelemetry', async () => {
+    // Driving a real block exercises the budgetEventsAdd no-op path (OTel not installed here).
+    const client = makeClient();
+    await expect(
+      withBudget({ usd: 0.01, onExceed: 'block', name: 'x' }, async () => {
+        await callN(client, { n: 2 });
+      }),
+    ).rejects.toThrow(BudgetExceeded);
+  });
 });
 
 describe('OTelSink attribution dimensions (G9)', () => {

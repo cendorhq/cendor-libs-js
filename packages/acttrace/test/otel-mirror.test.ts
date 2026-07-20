@@ -8,7 +8,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { bus } from '@cendor/core';
+import { LLMCall, Money, Usage, bus } from '@cendor/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type AuditEntry, AuditLog, OTelMirror, verify } from '../src/index.js';
 
@@ -97,5 +97,129 @@ describe('budget_event capture', () => {
     expect(p.cap_usd).toBe('5.00'); // written as snake_case for cross-language chain parity
     expect((p.tags as Record<string, unknown>).feature).toBe('refund_sync');
     expect(verify(path)[0]).toBe(true);
+  });
+});
+
+// --------------------------------------------- V2 mirror completeness (G11/G12/G16 span attributes)
+// The TS OTelMirror accepts an injected tracer, so we exercise the real attribute logic with a fake
+// tracer even though @opentelemetry/api is absent in this workspace (parity with test_otel_mirror.py).
+
+type Attrs = Record<string, unknown>;
+class FakeSpan {
+  attrs: Attrs = {};
+  constructor(readonly name: string) {}
+  setAttribute(key: string, value: unknown): void {
+    this.attrs[key] = value;
+  }
+  end(): void {}
+}
+class FakeTracer {
+  spans: FakeSpan[] = [];
+  startSpan(name: string): FakeSpan {
+    const s = new FakeSpan(name);
+    this.spans.push(s);
+    return s;
+  }
+}
+function spanFor(tracer: FakeTracer, type: string): Attrs {
+  const s = tracer.spans.find((sp) => sp.name === `audit.${type}`);
+  if (!s) throw new Error(`no audit.${type} span`);
+  return s.attrs;
+}
+
+describe('OTelMirror span attributes (V2 completeness)', () => {
+  it('budget_event carries identity + numeric projected-vs-cap (G10/G11)', () => {
+    const tracer = new FakeTracer();
+    const log = new AuditLog('s', { path: tmpFile(), mirror: new OTelMirror(tracer) });
+    bus.emit({
+      action: 'blocked',
+      reason: 'projected $9.00 would exceed cap $5.00',
+      name: 'per-run cap',
+      description: 'hard ceiling per support run',
+      model: 'gpt-4o',
+      toModel: null,
+      scope: 'session',
+      projectedUsd: '9.00',
+      capUsd: '5.00',
+      projectedTokens: null,
+      capTokens: null,
+      tags: { feature: 'refund_sync' },
+    });
+    log.detach();
+    const a = spanFor(tracer, 'budget_event');
+    expect(a['cendor.audit.budget']).toBe('per-run cap');
+    expect(a['cendor.audit.name']).toBeUndefined(); // suppressed for budget_event
+    expect(a['cendor.audit.description']).toBe('hard ceiling per support run');
+    expect(a['cendor.audit.scope']).toBe('session');
+    expect(a['cendor.audit.projected_usd']).toBe('9.00');
+    expect(a['cendor.audit.cap_usd']).toBe('5.00');
+    expect(a['cendor.audit.tag.feature']).toBe('refund_sync');
+  });
+
+  it('guardrail_decision carries agent/tool + policy provenance (G12)', () => {
+    const tracer = new FakeTracer();
+    const log = new AuditLog('s', { path: tmpFile(), mirror: new OTelMirror(tracer) });
+    bus.emit({
+      guardrail: 'prompt_injection',
+      stage: 'input',
+      action: 'block',
+      reason: 'injection detected',
+      agent: 'triage',
+      tool: '',
+      metadata: { severity: 'high', policy_version: '2', policy_hash: 'abc123' },
+    });
+    log.detach();
+    const a = spanFor(tracer, 'guardrail_decision');
+    expect(a['cendor.audit.agent']).toBe('triage');
+    expect(a['cendor.audit.severity']).toBe('high'); // nested severity now reaches the span
+    expect(a['cendor.audit.policy_version']).toBe('2');
+    expect(a['cendor.audit.policy_hash']).toBe('abc123');
+  });
+
+  it('llm_call carries usage/latency/replayed (G12)', () => {
+    const tracer = new FakeTracer();
+    const log = new AuditLog('s', { path: tmpFile(), mirror: new OTelMirror(tracer) });
+    bus.emit(
+      new LLMCall({
+        id: '1',
+        provider: 'openai',
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'x' }],
+        usage: new Usage({ inputTokens: 100, outputTokens: 40, reasoningTokens: 10 }),
+        cost: Money.zero(),
+        latencyMs: 123,
+        metadata: { replayed: true },
+      }),
+    );
+    log.detach();
+    const a = spanFor(tracer, 'llm_call');
+    expect(a['cendor.audit.input_tokens']).toBe(100);
+    expect(a['cendor.audit.output_tokens']).toBe(40);
+    expect(a['cendor.audit.reasoning_tokens']).toBe(10);
+    expect(a['cendor.audit.replayed']).toBe(true);
+  });
+
+  it('context_assembly carries budget math + block counts (G16)', () => {
+    const tracer = new FakeTracer();
+    const log = new AuditLog('s', { path: tmpFile(), mirror: new OTelMirror(tracer) });
+    bus.emit({
+      model: 'gpt-4o',
+      budget: 8000,
+      used: 6500,
+      decisions: [
+        { action: 'kept' },
+        { action: 'kept' },
+        { action: 'compressed' },
+        { action: 'dropped' },
+      ],
+    });
+    log.detach();
+    const a = spanFor(tracer, 'context_assembly');
+    expect(a['cendor.audit.budget_tokens']).toBe(8000);
+    expect(a['cendor.audit.used_tokens']).toBe(6500);
+    expect(a['cendor.audit.kept']).toBe(2);
+    expect(a['cendor.audit.compressed']).toBe(1); // squeeze's indirect visibility
+    expect(a['cendor.audit.dropped']).toBe(1);
+    expect(a['cendor.audit.truncated']).toBeUndefined(); // zero counts omitted
   });
 });

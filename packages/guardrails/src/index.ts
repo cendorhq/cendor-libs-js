@@ -10,6 +10,7 @@
  *
  * Imports ONLY `@cendor/core` (constitution rule 2). See docs/guardrails.md.
  */
+import { createRequire } from 'node:module';
 import {
   LLMCall,
   MISS,
@@ -89,7 +90,33 @@ function emit(g: Guardrail, stage: string, verdict: Verdict, ctx: Context): Guar
     metadata: { ...(g.metadata ?? {}), ...(verdict.metadata ?? {}), ...(ctx.metadata ?? {}) },
   });
   bus.emit(decision); // acttrace (if attached) chains this as a guardrail_decision entry
+  // G15: native governance counter (no-op without OpenTelemetry). Bounded label set.
+  decisionsAdd({ guardrail: g.name, stage, action: verdict.action });
   return decision;
+}
+
+// --- G15: native governance counter (optional, no-op without OpenTelemetry) ---
+// Lazily-created `cendor.guardrails.decisions` counter on meter `cendor.guardrails`. Loaded
+// synchronously via createRequire; `null` if `@opentelemetry/api` isn't installed. Renders as
+// `cendor_guardrails_decisions_total` in Prometheus.
+let decisionsCounter: { add: (value: number, attrs: Record<string, unknown>) => void } | null =
+  null;
+let decisionsCounterChecked = false;
+
+function decisionsAdd(attrs: Record<string, unknown>): void {
+  if (!decisionsCounterChecked) {
+    decisionsCounterChecked = true;
+    try {
+      const req = createRequire(import.meta.url);
+      const otel = req('@opentelemetry/api');
+      decisionsCounter = otel.metrics
+        .getMeter('cendor.guardrails')
+        .createCounter('cendor.guardrails.decisions');
+    } catch {
+      decisionsCounter = null; // OpenTelemetry not installed — stay in no-op mode
+    }
+  }
+  if (decisionsCounter !== null) decisionsCounter.add(1, attrs);
 }
 
 function handle(

@@ -709,6 +709,9 @@ export class AuditLog {
         decision_id: did,
         action: e.action, // 'blocked' | 'downgraded' | 'clamped'
         reason: e.reason ?? '',
+        // G10: the budget's human identity (@cendor/tokenguard >= 0.4), when named.
+        name: e.name ?? null,
+        description: e.description ?? null,
         model: e.model ?? '',
         to_model: e.toModel ?? null,
         scope: e.scope ?? null,

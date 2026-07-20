@@ -19,6 +19,7 @@
  *   `console.warn`. Deduped once-per-model (cleared by {@link reset}).
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createRequire } from 'node:module';
 import {
   Dec,
   LLMCall,
@@ -84,6 +85,10 @@ export class UnpricedModelWarning extends Error {
 export class BudgetEvent {
   readonly action: string;
   readonly reason: string;
+  /** The budget's human identity (`budget({ name })`), for UI/alert grouping. A bounded label. */
+  readonly name: string | null;
+  /** A longer human description of what the budget guards. */
+  readonly description: string | null;
   readonly model: string;
   readonly toModel: string | null;
   readonly scope: string | null;
@@ -97,6 +102,8 @@ export class BudgetEvent {
   constructor(init: {
     action: string;
     reason?: string;
+    name?: string | null;
+    description?: string | null;
     model?: string;
     toModel?: string | null;
     scope?: string | null;
@@ -108,6 +115,8 @@ export class BudgetEvent {
   }) {
     this.action = init.action;
     this.reason = init.reason ?? '';
+    this.name = init.name ?? null;
+    this.description = init.description ?? null;
     this.model = init.model ?? '';
     this.toModel = init.toModel ?? null;
     this.scope = init.scope ?? null;
@@ -185,6 +194,8 @@ export class Frame {
   downgrade: Record<string, string> | null;
   outputReserve: number;
   reasoningReserve: number;
+  name: string | null;
+  description: string | null;
   spentUsd: Decimal = new Dec(0);
   spentTokens = 0;
   calls = 0;
@@ -197,6 +208,8 @@ export class Frame {
     downgrade: Record<string, string> | null;
     outputReserve: number;
     reasoningReserve: number;
+    name?: string | null;
+    description?: string | null;
   }) {
     this.capUsd = init.capUsd;
     this.capTokens = init.capTokens;
@@ -205,6 +218,8 @@ export class Frame {
     this.downgrade = init.downgrade;
     this.outputReserve = init.outputReserve;
     this.reasoningReserve = init.reasoningReserve;
+    this.name = init.name ?? null;
+    this.description = init.description ?? null;
   }
 }
 
@@ -348,6 +363,8 @@ function emitBudgetEvent(
     new BudgetEvent({
       action,
       reason: args.reason,
+      name: args.frame.name,
+      description: args.frame.description,
       model: args.call.model,
       toModel: args.toModel ?? null,
       scope: args.frame.scope,
@@ -358,6 +375,36 @@ function emitBudgetEvent(
       tags: { ...currentTags() },
     }),
   );
+  // G15: native governance counter (no-op without OpenTelemetry). Bounded label set — `name` must
+  // be a fixed identifier (see BudgetConfig.name) so the time-series count stays bounded.
+  const counterAttrs: Record<string, unknown> = { action, model: args.call.model };
+  if (args.frame.scope) counterAttrs.scope = args.frame.scope;
+  if (args.frame.name) counterAttrs.name = args.frame.name;
+  budgetEventsAdd(counterAttrs);
+}
+
+// --- G15: native governance counter (optional, no-op without OpenTelemetry) ---
+// Lazily-created `cendor.tokenguard.budget.events` counter on meter `cendor.tokenguard` (the same
+// meter OTelSink uses). Loaded synchronously via createRequire to mirror sinks.ts; `null` if OTel
+// isn't installed. Renders as `cendor_tokenguard_budget_events_total` in Prometheus.
+let budgetEventsCounter: { add: (value: number, attrs: Record<string, unknown>) => void } | null =
+  null;
+let budgetEventsCounterChecked = false;
+
+function budgetEventsAdd(attrs: Record<string, unknown>): void {
+  if (!budgetEventsCounterChecked) {
+    budgetEventsCounterChecked = true;
+    try {
+      const req = createRequire(import.meta.url);
+      const otel = req('@opentelemetry/api');
+      budgetEventsCounter = otel.metrics
+        .getMeter('cendor.tokenguard')
+        .createCounter('cendor.tokenguard.budget.events');
+    } catch {
+      budgetEventsCounter = null; // OpenTelemetry not installed — stay in no-op mode
+    }
+  }
+  if (budgetEventsCounter !== null) budgetEventsCounter.add(1, attrs);
 }
 
 export function _preflightInterceptor(call: unknown): unknown {
@@ -576,6 +623,15 @@ export interface BudgetConfig {
   downgrade?: Record<string, string> | null;
   outputReserve?: number;
   reasoningReserve?: number;
+  /**
+   * Human identity carried on every {@link BudgetEvent} this budget fires (→ `cendor.audit.budget`
+   * on the acttrace mirror), so a monitor shows *which* budget acted. Keep it a **bounded**
+   * identifier (a fixed label like `'per-run cap'`, not a per-request string) — it is also a
+   * governance-counter attribute, so an unbounded value explodes a metrics backend's cardinality.
+   */
+  name?: string | null;
+  /** Longer human description of what the budget guards (→ `cendor.audit.description`, truncated). */
+  description?: string | null;
 }
 
 function validateBudgetConfig(cfg: BudgetConfig): void {
@@ -617,6 +673,8 @@ function makeFrame(cfg: BudgetConfig): Frame {
     downgrade: cfg.downgrade ?? null,
     outputReserve: cfg.outputReserve ?? DEFAULT_OUTPUT_RESERVE,
     reasoningReserve: cfg.reasoningReserve ?? 0,
+    name: cfg.name ?? null,
+    description: cfg.description ?? null,
   });
 }
 
@@ -648,6 +706,8 @@ export function budget(cfg: BudgetConfig, fn: never): never;
  * ```ts
  * import { budget } from '@cendor/tokenguard';
  * const answer = budget({ usd: 0.5, onExceed: 'raise' })(async (q: string) => respond(q));
+ * // name= gives the budget a human identity that rides every BudgetEvent it fires:
+ * const capped = budget({ usd: 5, name: 'per-run cap' })(async (q: string) => respond(q));
  * ```
  */
 export function budget(

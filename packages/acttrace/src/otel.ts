@@ -70,7 +70,67 @@ const ATTR_KEYS = [
   'data',
   'cost',
   'otel_trace_id',
+  'otel_span_id', // G12: the correlation span id (pivot target), was stamped but never exposed
 ] as const;
+
+/** Free-text attributes (`description`/`note`) are truncated to this many chars on the span. */
+const TEXT_MAX = 200;
+
+/** Set one scalar span attribute, skipping empties; stringify non-primitives. */
+function setScalar(span: OTelSpan, attr: string, value: unknown): void {
+  if (value === null || value === undefined || value === '') return;
+  if (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
+    span.setAttribute(attr, value);
+  } else if (typeof value === 'bigint') {
+    span.setAttribute(attr, Number(value));
+  } else {
+    span.setAttribute(attr, String(value));
+  }
+}
+
+/** Set an int span attribute when `value` is a real number (skip null / non-numeric). */
+function setInt(span: OTelSpan, attr: string, value: unknown): void {
+  if (typeof value === 'number' && Number.isFinite(value))
+    span.setAttribute(attr, Math.trunc(value));
+  else if (typeof value === 'bigint') span.setAttribute(attr, Number(value));
+}
+
+/** Set a truncated free-text attribute (`description`/`note`); skip empties. */
+function setText(span: OTelSpan, attr: string, value: unknown): void {
+  if (value === null || value === undefined || value === '') return;
+  let text = String(value);
+  if (text.length > TEXT_MAX) text = `${text.slice(0, TEXT_MAX - 1)}…`;
+  span.setAttribute(attr, text);
+}
+
+/** Flatten `track()` attribution tags as `cendor.audit.tag.<key>` (bounded values only). */
+function flattenTags(span: OTelSpan, tags: unknown): void {
+  if (tags === null || typeof tags !== 'object') return;
+  for (const [key, value] of Object.entries(tags as Record<string, unknown>)) {
+    if (value === null || value === undefined || value === '') continue;
+    const attr = `cendor.audit.tag.${key}`;
+    if (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
+      span.setAttribute(attr, value);
+    } else {
+      span.setAttribute(attr, String(value));
+    }
+  }
+}
+
+/** Count context-assembly block decisions by action and set the non-zero counts (G16). */
+function blockCounts(span: OTelSpan, decisions: unknown): void {
+  if (!Array.isArray(decisions)) return;
+  const counts: Record<string, number> = {};
+  for (const d of decisions) {
+    const action =
+      d !== null && typeof d === 'object' ? (d as Record<string, unknown>).action : null;
+    if (typeof action === 'string' && action) counts[action] = (counts[action] ?? 0) + 1;
+  }
+  for (const action of ['kept', 'truncated', 'summarized', 'compressed', 'dropped']) {
+    const n = counts[action] ?? 0;
+    if (n) span.setAttribute(`cendor.audit.${action}`, n);
+  }
+}
 
 /**
  * An `AuditLog(..., { mirror })` destination that mirrors each chained entry to OpenTelemetry.
@@ -117,7 +177,11 @@ export class OTelMirror {
       if (entry.hash) span.setAttribute('cendor.audit.hash', String(entry.hash));
       const system = this.system || (typeof payload.system === 'string' ? payload.system : '');
       if (system) span.setAttribute('cendor.audit.system', system);
+      const etype = String(entry.type ?? '');
       for (const key of ATTR_KEYS) {
+        // A budget's `name` is exposed as `cendor.audit.budget` (below), not the generic
+        // `cendor.audit.name`, so a monitor queries one clear attribute for the budget name.
+        if (key === 'name' && etype === 'budget_event') continue;
         const value = payload[key];
         if (value === null || value === undefined || value === '') continue;
         const attr = `cendor.audit.${key}`;
@@ -134,6 +198,53 @@ export class OTelMirror {
         } else {
           span.setAttribute(attr, String(value));
         }
+      }
+      // --- Typed / nested handling (G11/G12/G16): fields the flat loop can't reach (nested usage/
+      // metadata objects, renamed keys, per-action counts). Values still derive only from the
+      // already-scrubbed payload — never raw content.
+      if (etype === 'budget_event') {
+        // G11: budget identity + numeric projected-vs-cap
+        setScalar(span, 'cendor.audit.budget', payload.name);
+        setText(span, 'cendor.audit.description', payload.description);
+        setScalar(span, 'cendor.audit.scope', payload.scope);
+        setScalar(span, 'cendor.audit.to_model', payload.to_model);
+        setScalar(span, 'cendor.audit.projected_usd', payload.projected_usd);
+        setScalar(span, 'cendor.audit.cap_usd', payload.cap_usd);
+        setInt(span, 'cendor.audit.projected_tokens', payload.projected_tokens);
+        setInt(span, 'cendor.audit.cap_tokens', payload.cap_tokens);
+        flattenTags(span, payload.tags);
+      } else if (etype === 'llm_call') {
+        // G12: token usage / latency / cassette replay flag
+        const usage = payload.usage;
+        if (usage !== null && typeof usage === 'object') {
+          const u = usage as Record<string, unknown>;
+          setInt(span, 'cendor.audit.input_tokens', u.input_tokens);
+          setInt(span, 'cendor.audit.output_tokens', u.output_tokens);
+          setInt(span, 'cendor.audit.reasoning_tokens', u.reasoning_tokens);
+        }
+        setScalar(span, 'cendor.audit.latency_ms', payload.latency_ms);
+        span.setAttribute('cendor.audit.replayed', Boolean(payload.replayed ?? false));
+      } else if (etype === 'guardrail_decision') {
+        // G12: agent/tool + policy provenance from metadata
+        setScalar(span, 'cendor.audit.agent', payload.agent);
+        setScalar(span, 'cendor.audit.tool', payload.tool);
+        const meta = payload.metadata;
+        if (meta !== null && typeof meta === 'object') {
+          const m = meta as Record<string, unknown>;
+          // nested severity now reaches the span (the top-level key only ever matched a policy_flag).
+          setScalar(span, 'cendor.audit.severity', m.severity);
+          setScalar(span, 'cendor.audit.policy_version', m.policy_version);
+          setScalar(span, 'cendor.audit.policy_hash', m.policy_hash);
+        }
+      } else if (etype === 'human_oversight') {
+        setText(span, 'cendor.audit.note', payload.note); // G12
+      } else if (etype === 'audit_open') {
+        setScalar(span, 'cendor.audit.risk_tier', payload.risk_tier); // G12
+      } else if (etype === 'context_assembly') {
+        // G16: budget math + per-action block counts (distinct from a budget *name*)
+        setInt(span, 'cendor.audit.budget_tokens', payload.budget);
+        setInt(span, 'cendor.audit.used_tokens', payload.used);
+        blockCounts(span, payload.decisions);
       }
     } finally {
       span.end(); // a point-in-time governance event; duration is not meaningful

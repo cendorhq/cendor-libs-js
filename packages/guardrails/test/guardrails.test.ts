@@ -33,6 +33,15 @@ function collectDecisions(): GuardrailDecision[] {
   return out;
 }
 
+describe('G15 decisions counter', () => {
+  it('the increment never throws without @opentelemetry/api', () => {
+    // Driving a flagged decision exercises the decisionsAdd no-op path (OTel absent here).
+    const g = defineGuardrail(() => new Verdict('flag', 'hit'), { stage: 'input', name: 'x' });
+    const out = apply([g], 'input', msgs('hi'));
+    expect(out).toHaveLength(1);
+  });
+});
+
 describe('guardrail metadata', () => {
   it('merges static metadata onto the decision; ctx.metadata wins a clash', () => {
     const out = collectDecisions();
