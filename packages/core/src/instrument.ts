@@ -464,6 +464,9 @@ class StreamState {
   async *iterate(): AsyncGenerator<unknown> {
     try {
       for await (const chunk of this.stream) {
+        if (this.chunks.length === 0 && this.replayChunks === null) {
+          this.call.metadata.ttft_ms = performance.now() - this.start; // first live chunk (G23)
+        }
         this.chunks.push(chunk);
         yield chunk;
       }
@@ -620,7 +623,7 @@ function estimateStreamUsage(call: LLMCall, chunks: unknown[], provider: string)
   return new Usage({ inputTokens: inp, outputTokens: out });
 }
 
-function streamText(chunk: unknown, provider: string): string {
+export function streamText(chunk: unknown, provider: string): string {
   try {
     if (provider === 'openai_responses') {
       if (get(chunk, 'type') === 'response.output_text.delta')

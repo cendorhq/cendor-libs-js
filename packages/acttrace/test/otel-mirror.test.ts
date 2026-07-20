@@ -223,3 +223,47 @@ describe('OTelMirror span attributes (V2 completeness)', () => {
     expect(a['cendor.audit.truncated']).toBeUndefined(); // zero counts omitted
   });
 });
+
+// ----------------------------------------------------- V3: squeeze CompressionEvent chaining (G21)
+
+describe('compression (G21)', () => {
+  it('is chained by duck-typing (technique + ratio), metadata only', () => {
+    const path = tmpFile();
+    const log = new AuditLog('s', { path });
+    bus.emit({
+      technique: 'minify+dropnulls',
+      tokens_before: 1200,
+      tokens_after: 300,
+      ratio: 0.25,
+      store_kind: 'MemoryStore',
+      handle_id: 'abc123',
+      kind: 'json',
+    });
+    log.detach();
+    const entry = log.entries.find((e: AuditEntry) => e.type === 'compression');
+    expect(entry?.payload.technique).toBe('minify+dropnulls');
+    expect(entry?.payload.handle_id).toBe('abc123');
+    expect(verify(path)[0]).toBe(true);
+  });
+
+  it('mirrors technique + savings onto an audit.compression span', () => {
+    const tracer = new FakeTracer();
+    const log = new AuditLog('s', { path: tmpFile(), mirror: new OTelMirror(tracer) });
+    bus.emit({
+      technique: 'minify',
+      tokens_before: 1000,
+      tokens_after: 250,
+      ratio: 0.25,
+      store_kind: 'SQLiteStore',
+      handle_id: 'h1',
+      kind: 'json',
+    });
+    log.detach();
+    const a = spanFor(tracer, 'compression');
+    expect(a['cendor.audit.technique']).toBe('minify');
+    expect(a['cendor.audit.tokens_before']).toBe(1000);
+    expect(a['cendor.audit.tokens_after']).toBe(250);
+    expect(a['cendor.audit.store_kind']).toBe('SQLiteStore');
+    expect(a['cendor.audit.handle_id']).toBe('h1');
+  });
+});

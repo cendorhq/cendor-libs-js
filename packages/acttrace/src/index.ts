@@ -114,6 +114,7 @@ const CONTROLS: Record<string, Record<string, string[]>> = {
     human_oversight: ['Art.14 human oversight', 'Art.26(5) deployer oversight'],
     policy_flag: ['Art.10 data governance', 'Art.12 record-keeping'],
     budget_event: ['Art.12 record-keeping', 'Art.72 post-market monitoring'],
+    compression: ['Art.12 record-keeping'],
   },
   nist_rmf: {
     audit_open: ['GOVERN-1.1'],
@@ -126,6 +127,7 @@ const CONTROLS: Record<string, Record<string, string[]>> = {
     human_oversight: ['MANAGE-2.1'],
     policy_flag: ['MANAGE-2.1', 'MEASURE-2.1'],
     budget_event: ['MANAGE-2.1', 'MEASURE-2.1'],
+    compression: ['MEASURE-2.1'],
   },
   iso_42001: {
     audit_open: ['A.6.2.8 event logs'],
@@ -142,6 +144,7 @@ const CONTROLS: Record<string, Record<string, string[]>> = {
     human_oversight: ['A.9.2 responsible use', 'A.9.4 intended use'],
     policy_flag: ['A.7 data for AI systems', 'A.6.2.8 event logs', 'A.9.2 responsible use'],
     budget_event: ['A.6.2.6 operation & monitoring', 'A.6.2.8 event logs'],
+    compression: ['A.6.2.6 operation & monitoring'],
   },
   gdpr: {
     audit_open: ['Art.30 records of processing', 'Art.5(2) accountability'],
@@ -158,6 +161,7 @@ const CONTROLS: Record<string, Record<string, string[]>> = {
       'Art.30 records of processing',
     ],
     budget_event: ['Art.30 records of processing'],
+    compression: ['Art.5(1)(c) data minimisation'],
   },
 };
 
@@ -695,6 +699,24 @@ export class AuditLog {
         // metadata carries provenance the chain must record — e.g. loadPolicy's policy_hash /
         // policy_version. Duck-typed + json-normalized; empty by default, so it stays compatible.
         metadata: jsonable((e.metadata as unknown) ?? {}),
+      });
+    } else if (
+      event !== null &&
+      typeof event === 'object' &&
+      'technique' in event &&
+      'ratio' in event
+    ) {
+      // @cendor/squeeze CompressionEvent (G21) — duck-typed, metadata only (no content).
+      const e = event as Record<string, unknown>;
+      this._append('compression', {
+        decision_id: did,
+        technique: e.technique,
+        tokens_before: e.tokens_before ?? null,
+        tokens_after: e.tokens_after ?? null,
+        ratio: e.ratio ?? null,
+        store_kind: e.store_kind ?? null,
+        handle_id: e.handle_id ?? null,
+        kind: e.kind ?? null,
       });
     } else if (
       event !== null &&

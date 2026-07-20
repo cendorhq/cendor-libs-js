@@ -245,6 +245,15 @@ export class OTelMirror {
         setInt(span, 'cendor.audit.budget_tokens', payload.budget);
         setInt(span, 'cendor.audit.used_tokens', payload.used);
         blockCounts(span, payload.decisions);
+      } else if (etype === 'compression') {
+        // G21: squeeze technique + token savings (metadata only)
+        setScalar(span, 'cendor.audit.technique', payload.technique);
+        setInt(span, 'cendor.audit.tokens_before', payload.tokens_before);
+        setInt(span, 'cendor.audit.tokens_after', payload.tokens_after);
+        setScalar(span, 'cendor.audit.ratio', payload.ratio);
+        setScalar(span, 'cendor.audit.store_kind', payload.store_kind);
+        setScalar(span, 'cendor.audit.handle_id', payload.handle_id);
+        setScalar(span, 'cendor.audit.kind', payload.kind);
       }
     } finally {
       span.end(); // a point-in-time governance event; duration is not meaningful

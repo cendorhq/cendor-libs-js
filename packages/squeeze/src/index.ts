@@ -11,7 +11,7 @@
  * Satisfies `@cendor/core`'s `Compressor` protocol by shape (see {@link SqueezeCompressor}).
  */
 import { createHash } from 'node:crypto';
-import { tokens } from '@cendor/core';
+import { bus, currentTraceId, tokens } from '@cendor/core';
 import { type JVal, dumps, parseJson } from './json.js';
 import { MemoryStore, type StoreBackend } from './store.js';
 import {
@@ -301,7 +301,60 @@ export function compress(content: unknown, opts: CompressOptions = {}): [string,
   const technique = restoreMap.technique === undefined ? '' : String(restoreMap.technique);
   const id = sha256Hex(`${ref}:${technique}`).slice(0, 32);
   const handle = new Handle(id, kind, ref, restoreMap);
+  emitCompression(original, small, technique, kind, model, id);
   return [small, handle];
+}
+
+/**
+ * A metadata-only bus event emitted after each {@link compress} (G21). It carries only the *shape*
+ * of a compression — **never the text** — so a monitor/audit can show squeeze activity (technique,
+ * token savings). Duck-typed by `@cendor/acttrace` (keys `technique` + `ratio`) into a `compression`
+ * audit entry. See `docs/specs/bus-events.md`.
+ */
+export class CompressionEvent {
+  readonly kind: string;
+  readonly trace_id: string;
+  readonly ts: Date;
+  constructor(
+    readonly technique: string,
+    readonly tokens_before: number,
+    readonly tokens_after: number,
+    /** `tokens_after / tokens_before` — the fraction of tokens remaining (lower is better). */
+    readonly ratio: number,
+    readonly store_kind: string,
+    readonly handle_id: string,
+    kind = '',
+    trace_id = '',
+    ts?: Date,
+  ) {
+    this.kind = kind;
+    this.trace_id = trace_id;
+    this.ts = ts ?? new Date();
+  }
+}
+
+function emitCompression(
+  original: string,
+  small: string,
+  technique: string,
+  kind: string,
+  model: string,
+  handleId: string,
+): void {
+  const before = tokens.count(original, model);
+  const after = tokens.count(small, model);
+  bus.emit(
+    new CompressionEvent(
+      technique,
+      before,
+      after,
+      before ? after / before : 1.0,
+      backend.constructor.name,
+      handleId,
+      kind,
+      currentTraceId(),
+    ),
+  );
 }
 
 /** Restore the original content for a handle (same as `handle.expand()`). */
