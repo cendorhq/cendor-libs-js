@@ -1,5 +1,14 @@
 # @cendor/contextkit
 
+## 2.0.0
+
+### Patch Changes
+
+- Updated dependencies [ec4be36]
+- Updated dependencies [ec4be36]
+  - @cendor/core@0.7.0
+  - @cendor/squeeze@0.3.0
+
 ## 1.0.8
 
 ### Patch Changes
