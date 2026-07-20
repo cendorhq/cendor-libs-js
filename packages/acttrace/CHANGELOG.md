@@ -1,5 +1,11 @@
 # @cendor/acttrace
 
+## 0.8.0
+
+### Minor Changes
+
+- 16e627b: Mirror completeness — the `OTelMirror` now carries the structured fields an audit-history / monitoring view needs, not just labels. `audit.budget_event` spans gain the budget's name (`cendor.audit.budget`), description, `scope`, `to_model`, and the projected-vs-cap figures as dedicated attributes (`cendor.audit.projected_usd`/`cap_usd` as strings, `projected_tokens`/`cap_tokens` as ints) plus each `track()` tag as `cendor.audit.tag.<key>` (G10/G11). `audit.llm_call` gains `input_tokens`/`output_tokens`/`reasoning_tokens`/`latency_ms`/`replayed`; `audit.guardrail_decision` gains `agent`/`tool` and the guardrail's nested `severity`/`policy_version`/`policy_hash`; `audit.context_assembly` gains `budget_tokens`/`used_tokens` and non-zero per-action block counts (`kept`/`truncated`/`summarized`/`compressed`/`dropped`); `audit.human_oversight` gains the reviewer's `note`; `audit.audit_open` gains `risk_tier`; the correlation `otel_span_id` is now exposed as a queryable attribute (G12/G16). Backward-compatible; the file remains the sole verifiable evidence and the default (no-OTel) chain is byte-identical.
+
 ## 0.7.0
 
 ### Minor Changes
