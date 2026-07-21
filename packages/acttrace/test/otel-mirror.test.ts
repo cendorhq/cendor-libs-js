@@ -197,6 +197,9 @@ describe('OTelMirror span attributes (V2 completeness)', () => {
     expect(a['cendor.audit.output_tokens']).toBe(40);
     expect(a['cendor.audit.reasoning_tokens']).toBe(10);
     expect(a['cendor.audit.replayed']).toBe(true);
+    // latency is PyFloat-wrapped in the payload (int/float JSON parity) — it must reach the span as a
+    // real number, not "[object Object]" from String(PyFloat).
+    expect(a['cendor.audit.latency_ms']).toBe(123);
   });
 
   it('context_assembly carries budget math + block counts (G16)', () => {

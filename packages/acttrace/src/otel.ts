@@ -14,6 +14,7 @@
  * every current release and matches the rest of the stack (`@cendor/core` spans, the SDK span tree).
  */
 import { createRequire } from 'node:module';
+import { PyFloat } from './pyjson.js';
 
 /** Minimal shape of the OTel bits we touch (typed defensively — OpenTelemetry is optional). */
 interface OTelSpan {
@@ -76,8 +77,16 @@ const ATTR_KEYS = [
 /** Free-text attributes (`description`/`note`) are truncated to this many chars on the span. */
 const TEXT_MAX = 200;
 
+/** Unwrap a cross-language float wrapper to its plain number so it never serializes as
+ * "[object Object]" on a span (payload floats such as `latency_ms` are `PyFloat`-wrapped for the
+ * JSONL/hash side). */
+function unwrap(value: unknown): unknown {
+  return value instanceof PyFloat ? value.value : value;
+}
+
 /** Set one scalar span attribute, skipping empties; stringify non-primitives. */
-function setScalar(span: OTelSpan, attr: string, value: unknown): void {
+function setScalar(span: OTelSpan, attr: string, raw: unknown): void {
+  const value = unwrap(raw);
   if (value === null || value === undefined || value === '') return;
   if (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
     span.setAttribute(attr, value);
@@ -89,7 +98,8 @@ function setScalar(span: OTelSpan, attr: string, value: unknown): void {
 }
 
 /** Set an int span attribute when `value` is a real number (skip null / non-numeric). */
-function setInt(span: OTelSpan, attr: string, value: unknown): void {
+function setInt(span: OTelSpan, attr: string, raw: unknown): void {
+  const value = unwrap(raw);
   if (typeof value === 'number' && Number.isFinite(value))
     span.setAttribute(attr, Math.trunc(value));
   else if (typeof value === 'bigint') span.setAttribute(attr, Number(value));
@@ -182,7 +192,7 @@ export class OTelMirror {
         // A budget's `name` is exposed as `cendor.audit.budget` (below), not the generic
         // `cendor.audit.name`, so a monitor queries one clear attribute for the budget name.
         if (key === 'name' && etype === 'budget_event') continue;
-        const value = payload[key];
+        const value = unwrap(payload[key]);
         if (value === null || value === undefined || value === '') continue;
         const attr = `cendor.audit.${key}`;
         if (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
