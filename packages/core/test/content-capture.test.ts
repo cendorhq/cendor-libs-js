@@ -211,6 +211,21 @@ describe('useSpanEmitter (G20)', () => {
     dispose();
     expect(spans).toHaveLength(0);
   });
+
+  it('stamps cendor.usage_estimated only when the streamed count was estimated (G-V4-3)', () => {
+    const spans: RecordedSpan[] = [];
+    const dispose = otel.useSpanEmitter(fakeTracer(spans));
+    const est = new LLMCall({ id: '1', provider: 'openai', model: 'gpt-4o', messages: [] });
+    est.metadata.streamed = true;
+    est.metadata.usage_estimated = true;
+    bus.emit(est);
+    const real = new LLMCall({ id: '2', provider: 'openai', model: 'gpt-4o', messages: [] });
+    real.metadata.streamed = true; // real usage recovered from the stream → no est. flag
+    bus.emit(real);
+    dispose();
+    expect(spans[0].attrs['cendor.usage_estimated']).toBe('true'); // string, only when set
+    expect('cendor.usage_estimated' in spans[1].attrs).toBe(false);
+  });
 });
 
 describe('TTFT (G23)', () => {

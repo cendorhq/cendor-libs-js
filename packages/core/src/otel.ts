@@ -474,6 +474,9 @@ function emitLlmSpan(tr: RichTracer, call: LLMCall): void {
     const ttft = call.metadata?.ttft_ms;
     if (ttft != null) span.setAttribute('cendor.ttft_ms', ttft);
     if (call.metadata?.streamed) span.setAttribute('cendor.streamed', true);
+    // Truth = the product: mark streamed token counts recovered by offline estimate (not the
+    // provider's billed figure) so a monitor renders them "est.". String 'true', only when set.
+    if (call.metadata?.usage_estimated) span.setAttribute('cendor.usage_estimated', 'true');
     if (call.metadata?.replayed) span.setAttribute('cendor.replayed', true);
     if (call.traceId) span.setAttribute('cendor.trace_id', call.traceId);
     const attrs = contentAttrs({
