@@ -1,5 +1,12 @@
 # @cendor/cassette
 
+## 0.2.10
+
+### Patch Changes
+
+- Updated dependencies [60f2eaf]
+  - @cendor/core@0.8.0
+
 ## 0.2.9
 
 ### Patch Changes

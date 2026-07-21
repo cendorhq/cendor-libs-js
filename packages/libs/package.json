@@ -1,6 +1,6 @@
 {
   "name": "@cendor/libs",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "description": "All seven Cendor libraries in one install — plain building blocks for LLM apps: context, cost, compression, a deterministic guardrails gate, testing, and a tamper-evident audit trail.",
   "type": "module",
   "license": "Apache-2.0",
