@@ -20,12 +20,17 @@ interface OTelSpan {
   end(): void;
 }
 
-function loadTracer(): { startSpan(name: string): OTelSpan } | null {
+/** A tracer that can run a callback with the new span installed as the active context span. */
+interface OTelTracer {
+  startActiveSpan<T>(name: string, fn: (span: OTelSpan) => T): T;
+}
+
+function loadTracer(): OTelTracer | null {
   try {
     const req = createRequire(import.meta.url);
     // Loaded synchronously (mirrors Python's `from opentelemetry import trace`); no-op if absent.
     const otel = req('@opentelemetry/api') as {
-      trace: { getTracer(name: string): { startSpan(name: string): OTelSpan } };
+      trace: { getTracer(name: string): OTelTracer };
     };
     return otel.trace.getTracer('cendor.core');
   } catch {
@@ -46,42 +51,50 @@ export interface SpanOptions {
  * when `@opentelemetry/api` is absent** — in which case `fn(null)` still runs and its value is
  * returned (a no-op that never raises). The span is ended when `fn` returns (awaiting a returned
  * promise first). Callback form (a `@contextmanager` in Python); `ingest()` is the bus path.
+ *
+ * The span is made the **active context span** for the duration of `fn` (via `startActiveSpan`,
+ * parity with Python's `start_as_current_span`), so downstream reads of the active span — e.g.
+ * `@cendor/acttrace`'s audit-entry correlation — see it and can stamp its trace id. This needs a
+ * registered OTel context manager (installed by `NodeSDK` / `NodeTracerProvider.register()`); when
+ * none is registered the callback still runs and the span is simply not propagated (today's
+ * behavior), never an error.
  */
 export function span<T>(model: string, opts: SpanOptions, fn: (span: OTelSpan | null) => T): T {
   const tracer = loadTracer();
   if (tracer === null) return fn(null);
   const { provider, ...attributes } = opts;
-  const current = tracer.startSpan(`chat ${model}`);
-  let ended = false;
-  const end = (): void => {
-    if (!ended) {
-      ended = true;
-      current.end();
+  return tracer.startActiveSpan(`chat ${model}`, (current: OTelSpan): T => {
+    let ended = false;
+    const end = (): void => {
+      if (!ended) {
+        ended = true;
+        current.end();
+      }
+    };
+    try {
+      current.setAttribute('gen_ai.request.model', model);
+      if (provider != null) current.setAttribute('gen_ai.system', provider);
+      for (const [key, value] of Object.entries(attributes)) current.setAttribute(key, value);
+      const result = fn(current);
+      if (result != null && typeof (result as { then?: unknown }).then === 'function') {
+        return (result as unknown as Promise<unknown>).then(
+          (v) => {
+            end();
+            return v;
+          },
+          (e) => {
+            end();
+            throw e;
+          },
+        ) as unknown as T;
+      }
+      end();
+      return result;
+    } catch (e) {
+      end();
+      throw e;
     }
-  };
-  try {
-    current.setAttribute('gen_ai.request.model', model);
-    if (provider != null) current.setAttribute('gen_ai.system', provider);
-    for (const [key, value] of Object.entries(attributes)) current.setAttribute(key, value);
-    const result = fn(current);
-    if (result != null && typeof (result as { then?: unknown }).then === 'function') {
-      return (result as unknown as Promise<unknown>).then(
-        (v) => {
-          end();
-          return v;
-        },
-        (e) => {
-          end();
-          throw e;
-        },
-      ) as unknown as T;
-    }
-    end();
-    return result;
-  } catch (e) {
-    end();
-    throw e;
-  }
+  });
 }
 
 export interface IngestOptions {

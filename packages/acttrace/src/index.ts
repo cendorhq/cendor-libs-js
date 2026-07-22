@@ -14,7 +14,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { LLMCall, ToolCall, Usage, bus } from '@cendor/core';
+import { LLMCall, ToolCall, Usage, bus, currentTraceId } from '@cendor/core';
 import {
   DETECTORS,
   type Detector,
@@ -586,6 +586,19 @@ export class AuditLog {
   }
 
   /**
+   * @internal Stamp `@cendor/core`'s ambient run id (`currentTraceId()`, set by the SDK's
+   * `trace(runId)` scope — NOT OpenTelemetry) onto a payload, so a monitor can join a governance
+   * entry to its run even when no OTel span was active (post-hoc `spanTree`, or no context manager
+   * installed). No-op outside a run scope (`currentTraceId()` is `''`), so the default chain is
+   * byte-identical to before and matches the Python implementation.
+   */
+  private withRunId(payload: Record<string, unknown>): Record<string, unknown> {
+    const runId = currentTraceId();
+    if (!runId || payload.run_id !== undefined) return payload;
+    return { ...payload, run_id: runId };
+  }
+
+  /**
    * @internal Send a chained entry to the optional mirror. Best-effort: a mirror is an operational
    * copy, so its failure is swallowed and never breaks the tamper-evident chain (the file is truth).
    */
@@ -600,7 +613,9 @@ export class AuditLog {
 
   /** @internal Append one chain link. Also invoked by {@link Decision}. */
   _append(etype: string, payload: Record<string, unknown>): AuditEntry {
-    const enriched = this.withOtelIds(payload); // additive correlation ids (no-op without OTel span)
+    // Additive correlation ids (each a no-op outside its context): OTel active-span ids +
+    // core's ambient run id (the monitor's fallback join key when no OTel span was active).
+    const enriched = this.withRunId(this.withOtelIds(payload));
     const seq = this._seq;
     this._seq += 1;
     const ts = this.now();

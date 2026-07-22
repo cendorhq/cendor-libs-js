@@ -8,7 +8,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { LLMCall, Money, Usage, bus } from '@cendor/core';
+import { LLMCall, Money, Usage, bus, trace } from '@cendor/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type AuditEntry, AuditLog, OTelMirror, verify } from '../src/index.js';
 
@@ -224,6 +224,53 @@ describe('OTelMirror span attributes (V2 completeness)', () => {
     expect(a['cendor.audit.compressed']).toBe(1); // squeeze's indirect visibility
     expect(a['cendor.audit.dropped']).toBe(1);
     expect(a['cendor.audit.truncated']).toBeUndefined(); // zero counts omitted
+  });
+});
+
+// ------------------------------------------ G-LINK-2: ambient run-id correlation (no OTel needed)
+// `run_id` is core's own ambient (`trace(runId)`), NOT OpenTelemetry — it is the monitor's fallback
+// join key when no OTel span was active (post-hoc spanTree / no context manager). Stamped on every
+// entry inside a run scope, omitted outside it (so the default chain stays byte-identical).
+
+describe('run_id correlation (G-LINK-2)', () => {
+  it('stamps run_id on entries inside a trace() scope and mirrors it as cendor.audit.run_id', () => {
+    const tracer = new FakeTracer();
+    const log = new AuditLog('s', { path: tmpFile(), mirror: new OTelMirror(tracer) });
+    trace('run-abc123', () => {
+      bus.emit(
+        new LLMCall({
+          id: '1',
+          provider: 'openai',
+          model: 'gpt-4o',
+          messages: [{ role: 'user', content: 'x' }],
+          usage: new Usage({ inputTokens: 10, outputTokens: 5 }),
+          cost: Money.zero(),
+        }),
+      );
+    });
+    log.detach();
+    const entry = log.entries.find((e) => e.type === 'llm_call');
+    expect((entry?.payload as Record<string, unknown>).run_id).toBe('run-abc123');
+    expect(spanFor(tracer, 'llm_call')['cendor.audit.run_id']).toBe('run-abc123');
+  });
+
+  it('omits run_id outside a run scope (chain byte-identical to before)', () => {
+    const path = tmpFile();
+    const log = new AuditLog('s', { path });
+    bus.emit(
+      new LLMCall({
+        id: '2',
+        provider: 'openai',
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'x' }],
+        usage: new Usage({ inputTokens: 10, outputTokens: 5 }),
+        cost: Money.zero(),
+      }),
+    );
+    log.detach();
+    const entry = log.entries.find((e) => e.type === 'llm_call');
+    expect((entry?.payload as Record<string, unknown>).run_id).toBeUndefined();
+    expect(verify(path)[0]).toBe(true);
   });
 });
 
