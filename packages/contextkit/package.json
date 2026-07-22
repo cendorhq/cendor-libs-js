@@ -1,6 +1,6 @@
 {
   "name": "@cendor/contextkit",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Fit a prompt into the model's token budget — add your messages and context, pin what must stay, and the least-important parts are dropped to make it fit.",
   "type": "module",
   "license": "Apache-2.0",
