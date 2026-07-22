@@ -22,6 +22,7 @@ import {
   detectors,
   groupOf,
   registerDetector,
+  resetDetectors,
   scanCounts,
   scrub,
 } from './detectors.js';
@@ -37,6 +38,7 @@ import { type ChainStorage, fsChainStorage, fsReadLines, memoryChainStorage } fr
 export {
   DETECTORS,
   registerDetector,
+  resetDetectors,
   detectors,
   Policy,
   Finding,

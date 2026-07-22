@@ -8,6 +8,8 @@ import {
   enableLocalePack,
   nerAvailable,
   nerRedactor,
+  registerDetector,
+  resetDetectors,
   scan,
 } from '../src/index.js';
 import { ninoValid, shannonEntropy } from '../src/packs.js';
@@ -19,6 +21,27 @@ beforeEach(() => {
 afterEach(() => {
   DETECTORS.length = 0;
   DETECTORS.push(...snapshot);
+});
+
+describe('resetDetectors (the public inverse of the opt-ins)', () => {
+  it('restores exactly the built-in registry, dropping enabled detectors/packs', () => {
+    const builtins = [...DETECTORS];
+    enableEntropyDetector(24, 3.5);
+    enableLocalePack('uk');
+    expect(DETECTORS.some((d) => d.category === 'high_entropy_secret')).toBe(true);
+    expect(DETECTORS.length).toBeGreaterThan(builtins.length);
+    resetDetectors();
+    expect(DETECTORS).toEqual(builtins);
+    expect(DETECTORS.some((d) => d.category === 'high_entropy_secret')).toBe(false);
+  });
+
+  it('registerDetector is idempotent (same identity is not double-added)', () => {
+    const before = DETECTORS.length;
+    const d = DETECTORS[0]!;
+    registerDetector(d);
+    registerDetector(d);
+    expect(DETECTORS.length).toBe(before);
+  });
 });
 
 describe('off by default', () => {

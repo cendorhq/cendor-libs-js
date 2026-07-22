@@ -316,9 +316,27 @@ export const DETECTORS: Detector[] = [
   },
 ];
 
-/** Add a custom {@link Detector} to the global registry (it runs after the built-ins). */
+/** The built-in detectors, snapshotted at module load (before any opt-in registration mutates the
+ * live registry). {@link resetDetectors} restores exactly this set. */
+const BUILTIN_DETECTORS: Detector[] = [...DETECTORS];
+
+/**
+ * Add a custom {@link Detector} to the global registry (it runs after the built-ins). Idempotent:
+ * a detector already present (same identity) is not added twice. Undo with {@link resetDetectors}.
+ */
 export function registerDetector(detector: Detector): void {
-  DETECTORS.push(detector);
+  if (!DETECTORS.includes(detector)) DETECTORS.push(detector);
+}
+
+/**
+ * Restore the detector registry to the built-in defaults — dropping anything added by
+ * {@link registerDetector}. The registry is module-global (you opt in once at startup); this is the
+ * inverse, for dynamic reconfiguration and test isolation (so a registered detector can't leak into
+ * a later test and, e.g., scrub a high-entropy id from a later audit payload).
+ */
+export function resetDetectors(): void {
+  DETECTORS.length = 0;
+  DETECTORS.push(...BUILTIN_DETECTORS);
 }
 
 /** A copy of the active detector registry (built-ins plus anything registered). */
