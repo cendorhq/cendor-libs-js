@@ -1,7 +1,8 @@
 import type { Serialized } from '@langchain/core/load/serializable';
 import type { LLMResult } from '@langchain/core/outputs';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LLMCall, ToolCall, bus, prices } from '../src/index.js';
+import { _resetAmbient } from '../src/ambient.js';
+import { LLMCall, ToolCall, addAmbientProvider, bus, prices } from '../src/index.js';
 import { CendorCallbackHandler } from '../src/langchain.js';
 
 /** Collect every event emitted on the bus for the duration of a test. */
@@ -40,6 +41,7 @@ describe('CendorCallbackHandler', () => {
   afterEach(() => {
     bus._reset();
     prices._reset();
+    _resetAmbient();
   });
 
   it('is a valid LangChain callback handler (duck-typed accept)', () => {
@@ -230,5 +232,96 @@ describe('CendorCallbackHandler', () => {
     expect(() =>
       h.handleLLMEnd(chatResult({ input_tokens: 1, output_tokens: 1 }, 'gpt-4o'), 'run-x'),
     ).not.toThrow();
+  });
+
+  // --- GLR-11a: agent/chain/node names onto metadata.agent -------------------------------------
+
+  it('stamps a LangGraph node name (metadata.langgraph_node) onto metadata.agent', () => {
+    const { events, stop } = collect();
+    const h = new CendorCallbackHandler();
+    // A node chain carrying the LangGraph node name in metadata, with a chat model under it.
+    h.handleChainStart(
+      {} as Serialized,
+      {},
+      'node',
+      undefined,
+      undefined,
+      { langgraph_node: 'researcher' },
+      undefined,
+      undefined, // root
+    );
+    h.handleChatModelStart({} as Serialized, [], 'llm-1', 'node');
+    h.handleLLMEnd(chatResult({ input_tokens: 5, output_tokens: 3 }, 'gpt-4o'), 'llm-1', 'node');
+    stop();
+    const call = events.find((e): e is LLMCall => e instanceof LLMCall) as LLMCall;
+    expect(call.metadata.agent).toBe('researcher');
+  });
+
+  it('falls back to the run name when no explicit/node metadata is present', () => {
+    const { events, stop } = collect();
+    const h = new CendorCallbackHandler();
+    h.handleChatModelStart(
+      {} as Serialized,
+      [],
+      'solo',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'summarizer', // runName
+    );
+    h.handleLLMEnd(chatResult({ input_tokens: 1, output_tokens: 1 }, 'gpt-4o'), 'solo');
+    stop();
+    const call = events.find((e): e is LLMCall => e instanceof LLMCall) as LLMCall;
+    expect(call.metadata.agent).toBe('summarizer');
+  });
+
+  it('explicit metadata.agent wins over the node name / run name', () => {
+    const { events, stop } = collect();
+    const h = new CendorCallbackHandler();
+    h.handleChatModelStart(
+      {} as Serialized,
+      [],
+      'solo',
+      undefined, // parentRunId
+      undefined, // extraParams
+      undefined, // tags
+      { agent: 'explicit-agent', langgraph_node: 'researcher' }, // metadata (7th)
+      'summarizer', // runName
+    );
+    h.handleLLMEnd(chatResult({ input_tokens: 1, output_tokens: 1 }, 'gpt-4o'), 'solo');
+    stop();
+    const call = events.find((e): e is LLMCall => e instanceof LLMCall) as LLMCall;
+    expect(call.metadata.agent).toBe('explicit-agent');
+  });
+
+  it('an unnamed plain chain stamps no agent (no RunnableSequence noise)', () => {
+    const { events, stop } = collect();
+    const h = new CendorCallbackHandler();
+    h.handleChatModelStart({} as Serialized, [], 'solo');
+    h.handleLLMEnd(chatResult({ input_tokens: 1, output_tokens: 1 }, 'gpt-4o'), 'solo');
+    stop();
+    const call = events.find((e): e is LLMCall => e instanceof LLMCall) as LLMCall;
+    expect(call.metadata.agent).toBeUndefined();
+  });
+
+  it('the handler-derived agent is not overwritten by an ambient provider (specific wins)', () => {
+    const { events, stop } = collect();
+    addAmbientProvider(() => ({ agent: 'ambient-agent' }));
+    const h = new CendorCallbackHandler();
+    h.handleChatModelStart(
+      {} as Serialized,
+      [],
+      'solo',
+      undefined, // parentRunId
+      undefined, // extraParams
+      undefined, // tags
+      { agent: 'node-agent' }, // metadata (7th)
+      undefined, // runName
+    );
+    h.handleLLMEnd(chatResult({ input_tokens: 1, output_tokens: 1 }, 'gpt-4o'), 'solo');
+    stop();
+    const call = events.find((e): e is LLMCall => e instanceof LLMCall) as LLMCall;
+    expect(call.metadata.agent).toBe('node-agent');
   });
 });

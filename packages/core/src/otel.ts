@@ -9,9 +9,11 @@
  * attribute bag. Neither touches the event bus except `ingest`, which emits the normalized `LLMCall`.
  */
 import { createRequire } from 'node:module';
+import { applyAmbient } from './ambient.js';
 import { emit, subscribe, unsubscribe } from './bus.js';
 import { streamText } from './instrument.js';
 import { estimate } from './prices.js';
+import { currentTraceId } from './trace.js';
 import { LLMCall, type Message, ToolCall, Usage } from './types.js';
 
 /** Minimal shape of the bits of the OTel span we touch (typed defensively — OTel is optional). */
@@ -149,9 +151,13 @@ export function ingest(attributes: Record<string, unknown>, opts: IngestOptions 
     model,
     messages: messages ?? [],
     usage,
+    // GLR-8: stamp the ambient trace id at construction so an ingested call joins the run it
+    // belongs to (previously left '' → orphaned from every run downstream).
+    traceId: currentTraceId(),
     ts: new Date(),
   });
   call.metadata.source = 'otel';
+  applyAmbient(call);
   if (usage !== null) {
     try {
       call.cost = estimate(call.model, usage.inputTokens, {
@@ -492,6 +498,11 @@ function emitLlmSpan(tr: RichTracer, call: LLMCall): void {
     if (call.metadata?.usage_estimated) span.setAttribute('cendor.usage_estimated', 'true');
     if (call.metadata?.replayed) span.setAttribute('cendor.replayed', true);
     if (call.traceId) span.setAttribute('cendor.trace_id', call.traceId);
+    // GLR-10 (D2=YES): a libs-only app can self-identify an agent via an ambient provider (or the
+    // LangChain handler stamps a node/chain name — GLR-11a). Surface it on the standard semconv
+    // attribute so a trace-based monitor shows it; core invents nothing — only what was stamped.
+    const agent = call.metadata?.agent;
+    if (typeof agent === 'string' && agent) span.setAttribute('gen_ai.agent.name', agent);
     const attrs = contentAttrs({
       inputMessages: call.messages,
       outputMessages: responseMessages(call),

@@ -21,7 +21,16 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  *   - the file is `json.dumps(indent=2, ensure_ascii=False)` (via {@link dumpsIndent2}) with no
  *     trailing newline, insertion-order keys, and the 6-field entry order.
  */
-import { LLMCall, MISS, ToolCall, addInterceptor, bus, removeInterceptor } from '@cendor/core';
+import {
+  LLMCall,
+  MISS,
+  ToolCall,
+  addAmbientProvider,
+  addInterceptor,
+  bus,
+  removeInterceptor,
+} from '@cendor/core';
+import type { AmbientEvent } from '@cendor/core';
 import { sha256Hex } from './hash.js';
 import { PyFloat, type PyValue, canonical, dumpsIndent2, parsePreserving } from './pyjson.js';
 import { type CassetteStorage, resolveStorage } from './storage.js';
@@ -42,6 +51,33 @@ export const _drift: Array<Record<string, unknown>> = [];
 /** Marks which record/replay context an event belongs to, so concurrent `using()` blocks on the
  * process-global bus don't capture each other's events (Python's `_active_session` ContextVar). */
 const activeSession = new AsyncLocalStorage<string>();
+
+/**
+ * GLR-7: reserved internal metadata key carrying the record/replay session id, stamped at call
+ * initiation by {@link cassetteAmbient}. It is a **top-level** metadata key (not inside
+ * `request_kwargs`), so it never reaches the provider and is invisible to the replay fingerprint
+ * (`_normalizedRequest` hashes only kind/provider/model/messages/stream) — every recorded cassette
+ * replays byte-identically, nothing to re-record.
+ */
+const SESSION_KEY = '__cendor_cassette_session';
+
+/**
+ * The ambient provider (GLR-7): stamp the active session onto an event at construction — the
+ * caller's synchronous frame, inside the `using()` scope — so the recorder can record and the
+ * replayer can match even a streamed call finalized after the scope exits (delivery-time
+ * `activeSession.getStore()` is empty for such a call). No-op outside a session.
+ */
+function cassetteAmbient(_event: AmbientEvent): Record<string, unknown> | undefined {
+  const session = activeSession.getStore();
+  return session ? { [SESSION_KEY]: session } : undefined;
+}
+
+/** The session an event belongs to: prefer the pre-flight stamp; fall back to the delivery-time ALS
+ * (split-brain: the event was built by a second `@cendor/core` copy whose provider we never ran). */
+function sessionOf(event: unknown): string | undefined {
+  const stamped = (event as { metadata?: Record<string, unknown> } | null)?.metadata?.[SESSION_KEY];
+  return typeof stamped === 'string' ? stamped : activeSession.getStore();
+}
 
 function uuidHex(): string {
   return globalThis.crypto.randomUUID().replace(/-/g, '');
@@ -337,8 +373,9 @@ async function recording<T>(
   const entries: CassetteEntry[] = [];
   const session = uuidHex();
 
+  addAmbientProvider(cassetteAmbient); // GLR-7: stamp the session pre-emit (idempotent)
   const recorder = (event: unknown): void => {
-    if (activeSession.getStore() !== session) return;
+    if (sessionOf(event) !== session) return;
     let response: PyValue;
     let marker: string;
     let kind: string;
@@ -389,8 +426,9 @@ async function replaying<T>(
   const cursor = new Map<string, number>(); // per-replay context, keyed by hash
   const session = uuidHex();
 
+  addAmbientProvider(cassetteAmbient); // GLR-7: stamp the session pre-emit (idempotent)
   const interceptor = (event: unknown): unknown => {
-    if (activeSession.getStore() !== session) return MISS; // another replay context — decline
+    if (sessionOf(event) !== session) return MISS; // another replay context — decline
     const request = norm(event);
     const h = _hash(request);
     const queue = byHash.get(h) ?? [];
@@ -435,8 +473,9 @@ async function rerecording<T>(
   const cursor = new Map<string, number>();
   const session = uuidHex();
 
+  addAmbientProvider(cassetteAmbient); // GLR-7: stamp the session pre-emit (idempotent)
   const recorder = (event: unknown): void => {
-    if (activeSession.getStore() !== session) return;
+    if (sessionOf(event) !== session) return;
     let live: PyValue;
     let kind: string;
     if (event instanceof LLMCall) {

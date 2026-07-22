@@ -44,6 +44,7 @@ import type { Serialized } from '@langchain/core/load/serializable';
 import type { UsageMetadata } from '@langchain/core/messages';
 import type { LLMResult } from '@langchain/core/outputs';
 
+import { applyAmbient } from './ambient.js';
 import * as bus from './bus.js';
 import * as prices from './prices.js';
 import { LLMCall, ToolCall, Usage } from './types.js';
@@ -97,6 +98,9 @@ export class CendorCallbackHandler extends BaseCallbackHandler {
   private readonly parents = new Map<string, string | null>();
   // tool runId -> pending { name, input }, bridged from handleToolStart to handleToolEnd.
   private readonly toolRuns = new Map<string, { name: string; input: unknown }>();
+  // runId -> agent/chain/node name (GLR-11a), captured at *Start from explicit metadata (user wins),
+  // LangGraph's `langgraph_node`, or the run name. Removed on run end/error alongside `parents`.
+  private readonly agents = new Map<string, string>();
 
   // Node is single-threaded, so — unlike the Python handler — there is no lock guarding the maps.
 
@@ -121,6 +125,30 @@ export class CendorCallbackHandler extends BaseCallbackHandler {
   private forget(runId: string | undefined): void {
     if (!runId) return;
     this.parents.delete(runId);
+    this.agents.delete(runId);
+  }
+
+  /** Record a run's agent/chain/node name (GLR-11a) if one could be derived. */
+  private recordAgent(runId: string | undefined, name: string | undefined): void {
+    if (runId && name) this.agents.set(runId, name);
+  }
+
+  /**
+   * The agent name for an event: the nearest recorded name walking `runId` up its `parent` chain
+   * (a model call's own run rarely names an agent; its parent LangGraph node does), else the parent.
+   */
+  private agentFor(runId: string | undefined, parentRunId: string | undefined): string | undefined {
+    let rid = runId ?? '';
+    const seen = new Set<string>();
+    while (rid && !seen.has(rid)) {
+      seen.add(rid);
+      const name = this.agents.get(rid);
+      if (name) return name;
+      const parent = this.parents.get(rid);
+      if (!parent) break;
+      rid = parent;
+    }
+    return parentRunId ? this.agents.get(parentRunId) : undefined;
   }
 
   /**
@@ -144,11 +172,12 @@ export class CendorCallbackHandler extends BaseCallbackHandler {
     runId: string,
     _runType?: string,
     _tags?: string[],
-    _metadata?: Record<string, unknown>,
-    _runName?: string,
+    metadata?: Record<string, unknown>,
+    runName?: string,
     parentRunId?: string,
   ): void {
     this.register(runId, parentRunId);
+    this.recordAgent(runId, agentNameFrom(metadata, runName));
   }
 
   override handleChainEnd(_outputs: unknown, runId: string): void {
@@ -164,8 +193,13 @@ export class CendorCallbackHandler extends BaseCallbackHandler {
     _messages: unknown,
     runId: string,
     parentRunId?: string,
+    _extraParams?: Record<string, unknown>,
+    _tags?: string[],
+    metadata?: Record<string, unknown>,
+    runName?: string,
   ): void {
     this.register(runId, parentRunId);
+    this.recordAgent(runId, agentNameFrom(metadata, runName));
   }
 
   override handleLLMStart(
@@ -173,8 +207,13 @@ export class CendorCallbackHandler extends BaseCallbackHandler {
     _prompts: string[],
     runId: string,
     parentRunId?: string,
+    _extraParams?: Record<string, unknown>,
+    _tags?: string[],
+    metadata?: Record<string, unknown>,
+    runName?: string,
   ): void {
     this.register(runId, parentRunId);
+    this.recordAgent(runId, agentNameFrom(metadata, runName));
   }
 
   // ------------------------------------------------------------------ LLM calls
@@ -192,6 +231,9 @@ export class CendorCallbackHandler extends BaseCallbackHandler {
         traceId: this.traceId(runId, parentRunId),
       });
       call.metadata.source = 'langchain';
+      const agent = this.agentFor(runId, parentRunId);
+      if (agent) call.metadata.agent = agent; // GLR-11a
+      applyAmbient(call);
       setCost(call, usage);
       bus.emit(call);
     } catch {
@@ -213,6 +255,9 @@ export class CendorCallbackHandler extends BaseCallbackHandler {
       });
       call.metadata.source = 'langchain';
       call.metadata.error = errorMessage(err);
+      const agent = this.agentFor(runId, parentRunId);
+      if (agent) call.metadata.agent = agent; // GLR-11a
+      applyAmbient(call);
       bus.emit(call);
     } catch {
       // recording must never break the app
@@ -251,6 +296,9 @@ export class CendorCallbackHandler extends BaseCallbackHandler {
         traceId: this.traceId(runId, parentRunId),
       });
       tc.metadata.source = 'langchain';
+      const agent = this.agentFor(runId, parentRunId);
+      if (agent) tc.metadata.agent = agent; // GLR-11a
+      applyAmbient(tc);
       bus.emit(tc);
     } catch {
       // recording must never break the app
@@ -272,6 +320,9 @@ export class CendorCallbackHandler extends BaseCallbackHandler {
       });
       tc.metadata.source = 'langchain';
       tc.metadata.error = errorMessage(err);
+      const agent = this.agentFor(runId, parentRunId);
+      if (agent) tc.metadata.agent = agent; // GLR-11a
+      applyAmbient(tc);
       bus.emit(tc);
     } catch {
       // recording must never break the app
@@ -286,6 +337,21 @@ export class CendorCallbackHandler extends BaseCallbackHandler {
 /** A hex UUID (no dashes), mirroring the ids `instrument()` stamps. */
 function uuidHex(): string {
   return globalThis.crypto.randomUUID().replace(/-/g, '');
+}
+
+/**
+ * Derive an agent/chain/node name (GLR-11a) from a run's callback metadata + run name. Priority:
+ * an explicit `metadata.agent` (the app wins), then LangGraph's `langgraph_node`, then the run name.
+ * Returns `undefined` when nothing meaningful is available (plain chains stay unnamed rather than
+ * stamping noise like `RunnableSequence`).
+ */
+function agentNameFrom(metadata?: Record<string, unknown>, runName?: string): string | undefined {
+  const explicit = metadata?.agent;
+  if (typeof explicit === 'string' && explicit) return explicit;
+  const node = metadata?.langgraph_node;
+  if (typeof node === 'string' && node) return node;
+  if (typeof runName === 'string' && runName) return runName;
+  return undefined;
 }
 
 /** The `.message` on a chat `Generation` carries `usage_metadata`/`response_metadata` (AIMessage). */

@@ -596,6 +596,34 @@ describe('streaming', () => {
     const hashes = new Set(payload.entries.map((e: { request_hash: string }) => e.request_hash));
     expect(hashes.size).toBe(2);
   });
+
+  it('records a stream drained inside a different session (GLR-7 pre-flight session stamp)', async () => {
+    // A's streamed call is created in session A but drained inside session B's block (the
+    // concurrent-recording / detached-consumer case). The pre-flight session stamp keeps the event
+    // bound to A: A records it, B declines it. Before the fix the delivery-time ALS read (= B) would
+    // (wrongly) record it into B and drop it from A.
+    const pathA = p('sess-a.json');
+    const pathB = p('sess-b.json');
+    const clientA = streamClient([delta('Hel'), delta('lo'), usageChunk(10, 5)]);
+    let out = '';
+    await using(pathA, { mode: 'record' }, async () => {
+      const streamA = (await clientA.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'a' }],
+        stream: true,
+      })) as AsyncIterable<{ choices: Array<{ delta: { content: string } }> }>;
+      await using(pathB, { mode: 'record' }, async () => {
+        for await (const c of streamA) {
+          if (c.choices?.length) out += c.choices[0]!.delta.content;
+        }
+      });
+    });
+    expect(out).toBe('Hello');
+    const a = JSON.parse(readFileSync(pathA, 'utf-8'));
+    const b = JSON.parse(readFileSync(pathB, 'utf-8'));
+    expect(a.entries.length).toBe(1); // recorded in A (its creation session), not lost
+    expect(b.entries.length).toBe(0); // B does not steal A's event
+  });
 });
 
 // --------------------------------------------------------------------------- versioning

@@ -212,6 +212,19 @@ describe('useSpanEmitter (G20)', () => {
     expect(spans).toHaveLength(0);
   });
 
+  it('maps metadata.agent -> gen_ai.agent.name for a libs-only app (GLR-10)', () => {
+    const spans: RecordedSpan[] = [];
+    const dispose = otel.useSpanEmitter(fakeTracer(spans));
+    const named = new LLMCall({ id: '1', provider: 'openai', model: 'gpt-4o', messages: [] });
+    named.metadata.agent = 'reviewer';
+    bus.emit(named);
+    const anon = new LLMCall({ id: '2', provider: 'openai', model: 'gpt-4o', messages: [] });
+    bus.emit(anon);
+    dispose();
+    expect(spans[0].attrs['gen_ai.agent.name']).toBe('reviewer');
+    expect('gen_ai.agent.name' in spans[1].attrs).toBe(false); // core invents nothing
+  });
+
   it('stamps cendor.usage_estimated only when the streamed count was estimated (G-V4-3)', () => {
     const spans: RecordedSpan[] = [];
     const dispose = otel.useSpanEmitter(fakeTracer(spans));

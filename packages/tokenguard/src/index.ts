@@ -27,12 +27,13 @@ import {
   Money,
   Reroute,
   UnknownModelError,
+  addAmbientProvider,
   addInterceptor,
   bus,
   prices,
   tokens,
 } from '@cendor/core';
-import type { Decimal, Message, Sink } from '@cendor/core';
+import type { AmbientEvent, Decimal, Message, Sink } from '@cendor/core';
 
 // --------------------------------------------------------------------------- constants
 
@@ -97,6 +98,13 @@ export class BudgetEvent {
   readonly projectedTokens: number | null;
   readonly capTokens: number | null;
   readonly tags: Record<string, unknown>;
+  /**
+   * The run/trace id of the call this action guarded (GLR-9 [plan GLR-5/6]: taken from
+   * `call.traceId`, which the emitter has in hand). `''` when the call carried no trace id. This is
+   * the only field that links a `budget_event` to its run — `acttrace` copies it into the audit
+   * entry's `run_id`, so a monitor can join a budget block back to the run it fired on.
+   */
+  readonly traceId: string;
   readonly ts: Date;
 
   constructor(init: {
@@ -112,6 +120,7 @@ export class BudgetEvent {
     projectedTokens?: number | null;
     capTokens?: number | null;
     tags?: Record<string, unknown>;
+    traceId?: string;
   }) {
     this.action = init.action;
     this.reason = init.reason ?? '';
@@ -125,6 +134,7 @@ export class BudgetEvent {
     this.projectedTokens = init.projectedTokens ?? null;
     this.capTokens = init.capTokens ?? null;
     this.tags = init.tags ?? {};
+    this.traceId = init.traceId ?? '';
     this.ts = new Date();
   }
 }
@@ -266,6 +276,15 @@ export interface ClampRow {
 
 const tagsStore = new AsyncLocalStorage<Record<string, unknown>>();
 const budgetsStore = new AsyncLocalStorage<Frame[]>();
+/**
+ * GLR-5 (Bug A): frames + tags captured **at call initiation** (the `pre()` frame, via the ambient
+ * seam), keyed off the event so `onCall` can enforce/accrue/attribute even when it fires **out of
+ * the originating scope** — the streamed-call case where `budgetsStore.getStore()` is already `[]`
+ * at delivery. Frames are stored **by reference** (the same `Frame[]` the scope's `Handle`/report
+ * reads), so accrual mutates the shared objects — no forked accounting. A `WeakMap` so a call that
+ * never reaches `onCall` is collected with no leak.
+ */
+const ambientAttach = new WeakMap<object, { frames: Frame[]; tags: Record<string, unknown> }>();
 const records: SpendRecord[] = [];
 const downgradeRows: DowngradeRow[] = [];
 const clampRows: ClampRow[] = [];
@@ -281,6 +300,23 @@ function currentTags(): Record<string, unknown> {
 
 function currentFrames(): Frame[] {
   return budgetsStore.getStore() ?? [];
+}
+
+/**
+ * The ambient provider (GLR-5): at every event's construction — the caller's synchronous frame,
+ * where the budget/track scopes are unconditionally correct — snapshot the live `Frame[]` (by
+ * reference) and the current tags, keyed off the event. `onCall` reads this back at delivery time.
+ * Attaches only for `LLMCall`s and only when a scope is actually active; merges no metadata (the
+ * attachment rides the WeakMap, not `event.metadata`). Never throws (the seam swallows anyway).
+ */
+function tokenguardAmbient(event: AmbientEvent): undefined {
+  if (!(event instanceof LLMCall)) return undefined;
+  const frames = budgetsStore.getStore();
+  const tags = tagsStore.getStore();
+  if (frames !== undefined || tags !== undefined) {
+    ambientAttach.set(event, { frames: frames ?? [], tags: tags ?? {} });
+  }
+  return undefined;
 }
 
 function warnUnpriced(model: string, mode: string): void {
@@ -299,6 +335,7 @@ function warnUnpriced(model: string, mode: string): void {
 function ensureSubscribed(): void {
   bus.subscribe(onCall); // idempotent on the bus side
   addInterceptor(_preflightInterceptor); // idempotent; pre-flight downgrade/clamp/block routing
+  addAmbientProvider(tokenguardAmbient); // idempotent; captures frames/tags pre-emit (GLR-5)
 }
 
 // --------------------------------------------------------------------------- projection helpers
@@ -373,6 +410,7 @@ function emitBudgetEvent(
       projectedTokens: args.projectedTokens ?? null,
       capTokens: args.frame.capTokens,
       tags: { ...currentTags() },
+      traceId: args.call.traceId, // GLR-6 linkage: the emitter has the call's trace id in hand
     }),
   );
   // G15: native governance counter (no-op without OpenTelemetry). Bounded label set — `name` must
@@ -528,7 +566,11 @@ function onCall(call: unknown): void {
   const out = call.usage !== null ? call.usage.outputTokens : 0;
   const rsn = call.usage !== null ? call.usage.reasoningTokens : 0;
 
-  const frames = currentFrames();
+  // GLR-5: prefer the frames/tags captured at initiation (correct even for a stream drained out of
+  // scope); fall back to the delivery-time ALS only when nothing was attached (split-brain: the
+  // event was constructed by a second `@cendor/core` copy whose ambient provider we never ran).
+  const attached = ambientAttach.get(call);
+  const frames = attached ? attached.frames : currentFrames();
   if (unpriced) {
     // A USD-cap budget can't enforce against a $0-recorded call. Warn once per model, naming the
     // innermost USD-cap frame's mode. (block/downgrade already warned pre-flight; this covers the
@@ -546,7 +588,7 @@ function onCall(call: unknown): void {
     }
   }
 
-  const tags = { ...currentTags() };
+  const tags = { ...(attached ? attached.tags : currentTags()) };
   records.push({
     tags,
     usd,

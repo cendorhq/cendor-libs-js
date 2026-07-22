@@ -23,6 +23,8 @@ export {
   removeInterceptor,
 } from './instrument.js';
 export type { Miss } from './instrument.js';
+export { addAmbientProvider, removeAmbientProvider } from './ambient.js';
+export type { AmbientEvent, AmbientProvider } from './ambient.js';
 export { currentTraceId, installTraceContext, trace } from './trace.js';
 export type { TraceContextStore } from './trace.js';
 

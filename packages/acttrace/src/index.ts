@@ -14,7 +14,8 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { LLMCall, ToolCall, Usage, bus, currentTraceId } from '@cendor/core';
+import { LLMCall, ToolCall, Usage, addAmbientProvider, bus, currentTraceId } from '@cendor/core';
+import type { AmbientEvent } from '@cendor/core';
 import {
   DETECTORS,
   type Detector,
@@ -93,6 +94,19 @@ const activeDecision = new AsyncLocalStorage<string>();
 
 function currentDecision(): string | null {
   return activeDecision.getStore() ?? null;
+}
+
+/**
+ * GLR-6 (F5): the ambient provider that stamps the active decision id onto an event's metadata at
+ * construction — the caller's synchronous frame, where the decision scope is unconditionally
+ * correct. `_onEvent` reads it back so an out-of-scope streamed call is still chained under the
+ * decision it was made in (the delivery-time `currentDecision()` read is `null` for such a call).
+ * Merges `decision_id` only; the never-overwrite seam keeps an explicit value; metadata never
+ * enters the audit chain (rule 6 — the payloads are explicit allowlists).
+ */
+function acttraceAmbient(_event: AmbientEvent): Record<string, unknown> | undefined {
+  const did = currentDecision();
+  return did ? { decision_id: did } : undefined;
 }
 
 // --------------------------------------------------------------------------- framework tables
@@ -497,6 +511,7 @@ export class AuditLog {
       this._append('audit_open', { system, risk_tier: riskTier });
     }
     bus.subscribe(this._onEvent);
+    addAmbientProvider(acttraceAmbient); // GLR-6: capture the active decision id pre-emit (F5)
   }
 
   /**
@@ -592,8 +607,10 @@ export class AuditLog {
    * installed). No-op outside a run scope (`currentTraceId()` is `''`), so the default chain is
    * byte-identical to before and matches the Python implementation.
    */
-  private withRunId(payload: Record<string, unknown>): Record<string, unknown> {
-    const runId = currentTraceId();
+  private withRunId(
+    payload: Record<string, unknown>,
+    runId: string = currentTraceId(),
+  ): Record<string, unknown> {
     if (!runId || payload.run_id !== undefined) return payload;
     return { ...payload, run_id: runId };
   }
@@ -611,11 +628,20 @@ export class AuditLog {
     }
   }
 
-  /** @internal Append one chain link. Also invoked by {@link Decision}. */
-  _append(etype: string, payload: Record<string, unknown>): AuditEntry {
+  /**
+   * @internal Append one chain link. Also invoked by {@link Decision}. `runId` overrides the ambient
+   * `currentTraceId()` — GLR-6 threads the *event's* captured `traceId` for auto-captured
+   * `llm_call`/`tool_call`/`budget_event` so the run join survives a delivery that fired out of the
+   * originating scope (F6); everything else keeps the ambient default (byte-identical in-scope).
+   */
+  _append(
+    etype: string,
+    payload: Record<string, unknown>,
+    runId: string = currentTraceId(),
+  ): AuditEntry {
     // Additive correlation ids (each a no-op outside its context): OTel active-span ids +
     // core's ambient run id (the monitor's fallback join key when no OTel span was active).
-    const enriched = this.withRunId(this.withOtelIds(payload));
+    const enriched = this.withRunId(this.withOtelIds(payload), runId);
     const seq = this._seq;
     this._seq += 1;
     const ts = this.now();
@@ -665,21 +691,33 @@ export class AuditLog {
   private readonly _onEvent = (event: unknown): void => {
     const did = currentDecision();
     if (event instanceof LLMCall) {
-      this._append('llm_call', {
-        decision_id: did,
-        provider: event.provider,
-        model: event.model,
-        usage: event.usage === null ? null : usageJsonable(event.usage),
-        cost: event.cost === null ? null : event.cost.toString(),
-        latency_ms: event.latencyMs === null ? null : new PyFloat(event.latencyMs),
-        replayed: Boolean(event.metadata?.replayed ?? false),
-      });
+      // GLR-6: decision_id + run_id from the event's captured context (F5/F6), not the delivery-time
+      // ambient reads — correct even when the stream finalized outside the originating scope.
+      const eventDid = (event.metadata?.decision_id as string | undefined) ?? did;
+      this._append(
+        'llm_call',
+        {
+          decision_id: eventDid,
+          provider: event.provider,
+          model: event.model,
+          usage: event.usage === null ? null : usageJsonable(event.usage),
+          cost: event.cost === null ? null : event.cost.toString(),
+          latency_ms: event.latencyMs === null ? null : new PyFloat(event.latencyMs),
+          replayed: Boolean(event.metadata?.replayed ?? false),
+        },
+        event.traceId || undefined,
+      );
     } else if (event instanceof ToolCall) {
-      this._append('tool_call', {
-        decision_id: did,
-        name: event.name,
-        arguments: jsonable(event.arguments),
-      });
+      const eventDid = (event.metadata?.decision_id as string | undefined) ?? did;
+      this._append(
+        'tool_call',
+        {
+          decision_id: eventDid,
+          name: event.name,
+          arguments: jsonable(event.arguments),
+        },
+        event.traceId || undefined,
+      );
     } else if (
       event !== null &&
       typeof event === 'object' &&
@@ -742,22 +780,28 @@ export class AuditLog {
     ) {
       // @cendor/tokenguard BudgetEvent — duck-typed, no import (like the guardrail branch above).
       const e = event as Record<string, unknown>;
-      this._append('budget_event', {
-        decision_id: did,
-        action: e.action, // 'blocked' | 'downgraded' | 'clamped'
-        reason: e.reason ?? '',
-        // G10: the budget's human identity (@cendor/tokenguard >= 0.4), when named.
-        name: e.name ?? null,
-        description: e.description ?? null,
-        model: e.model ?? '',
-        to_model: e.toModel ?? null,
-        scope: e.scope ?? null,
-        projected_usd: e.projectedUsd ?? null,
-        cap_usd: e.capUsd ?? null,
-        projected_tokens: e.projectedTokens ?? null,
-        cap_tokens: e.capTokens ?? null,
-        tags: jsonable((e.tags as unknown) ?? {}),
-      });
+      // GLR-6 linkage: copy the BudgetEvent's traceId into run_id so the monitor's dual-key join
+      // links this budget action back to its run (tokenguard >= this wave carries the field).
+      this._append(
+        'budget_event',
+        {
+          decision_id: did,
+          action: e.action, // 'blocked' | 'downgraded' | 'clamped'
+          reason: e.reason ?? '',
+          // G10: the budget's human identity (@cendor/tokenguard >= 0.4), when named.
+          name: e.name ?? null,
+          description: e.description ?? null,
+          model: e.model ?? '',
+          to_model: e.toModel ?? null,
+          scope: e.scope ?? null,
+          projected_usd: e.projectedUsd ?? null,
+          cap_usd: e.capUsd ?? null,
+          projected_tokens: e.projectedTokens ?? null,
+          cap_tokens: e.capTokens ?? null,
+          tags: jsonable((e.tags as unknown) ?? {}),
+        },
+        (e.traceId as string) || undefined,
+      );
     }
   };
 

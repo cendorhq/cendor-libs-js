@@ -9,6 +9,7 @@
  *   - **replay** — registered interceptors run *before* the real call; one may return a response to
  *     short-circuit it (returning {@link MISS} to decline).
  */
+import { applyAmbient } from './ambient.js';
 import { emit } from './bus.js';
 import { Dec } from './decimal.js';
 import { estimate } from './prices.js';
@@ -320,6 +321,9 @@ function pre(
   if (provider === 'openai_embeddings') {
     call.metadata.embedding = true; // so subscribers can tell embedding calls apart
   }
+  // Stamp ambient run context (agent, conversation id, budget frames, …) at the one
+  // guaranteed-correct moment — this synchronous frame — before interceptors run (§ ambient seam).
+  applyAmbient(call);
   return { call, start: performance.now() };
 }
 
@@ -747,6 +751,7 @@ function preTool(name: string, args: unknown[]): { tc: ToolCall; start: number }
     traceId: currentTraceId(),
     ts: new Date(),
   });
+  applyAmbient(tc);
   return { tc, start: performance.now() };
 }
 
