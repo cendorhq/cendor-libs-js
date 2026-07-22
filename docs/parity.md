@@ -29,6 +29,7 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 | native governance counters | ✅ | ✅ | `cendor.tokenguard.budget.events` (tg ≥ 1.3 / 0.4, labels action/model/scope/name) + `cendor.guardrails.decisions` (gr ≥ 1.6 / 0.7, labels guardrail/stage/action) — no-op without `@opentelemetry/api`; `*_total` in Prometheus so block/flag **rates** are chartable |
 | LangChain `CendorCallbackHandler` | ✅ | ✅ | `@cendor/core/langchain`; recording-only in both; reads `usage_metadata`, correlates by root-run `traceId` |
 | `trace()` correlation | ✅ contextvars | ✅ | AsyncLocalStorage-injectable; ambient fallback |
+| **ambient metadata seam** (core ≥ 1.9 / 0.10) | ✅ | ✅ | `add_ambient_provider` / `remove_ambient_provider` ↔ `addAmbientProvider` / `removeAmbientProvider` — a `(event) → metadata \| None`/`undefined` provider stamps run-scoped metadata (`agent` / `conversation_id` / `decision_id` …) onto every `LLMCall`/`ToolCall` at **construction**, before interceptors: never-raise, never-overwrite, registration order, zero-provider fast path. Core learns no SDK vocabulary; `metadata.agent` → `gen_ai.agent.name` on the span so a libs-only app surfaces the agent name |
 | **tokenguard** budgets/track/report/sinks | ✅ | ✅ | `AsyncLocalStorage` scoping; SQLite/Queue/OTel sinks |
 | **guardrails** rules/stages/install/scoped | ✅ | ✅ | deterministic gate at 4 stages (input/tool_call/tool_output/output); block/redact/flag → `guardrail_decision` on the bus; `apply`/`evaluate` (+ async), `install()` interceptor, `scoped()` per-request gating, per-guardrail `timeout` (async-only in TS — no threads) + `on_error`, `judge` helpers; no hard `node:*` — all-runtime (`scoped` uses `AsyncLocalStorage` when present, else an ambient fallback) |
 | guardrails detection-tier adapters | ✅ `classifier` / `prompt_guard` / `language` / `openai_moderation` | ✅ `classifier` / `language` / `openaiModeration` | bring-your-own local classifier / `detect` callable / OpenAI client — no ML deps; re-exported as `rules.*` + `adapters.*`. **`prompt_guard` is Python-only** (needs `transformers`) — 🚧 in TS: wire an ONNX/transformers.js model through `rules.classifier`. `language` needs a BYO `detect` in TS (no bundled langid). No jailbreak-detection claim — see "Threat model". |
@@ -78,4 +79,7 @@ and the Foundry Bot-Framework adapter. Usage capture for HuggingFace/Ollama/Gemi
 inheritance is CI-verified in both languages: `guard` is the identical acttrace object, the SDK
 `rules` namespace carries the full library catalogue (TS gained spotlight + the detection-tier
 adapters + the similarity checks), `embed()` is governed pre-flight, and a parity/identity test
-suite pins every re-export so drift fails the build.
+suite pins every re-export so drift fails the build. Since 1.13 / 0.18 the streaming union adds
+`ThinkingDelta` — streamed reasoning kept separate from `TextDelta`, for providers that stream it
+(Ollama `think`; OpenAI-compatible `reasoning_content`); the TS SDK doesn't stream Anthropic, so
+Anthropic thinking is moot there, but the event exists in both languages.
