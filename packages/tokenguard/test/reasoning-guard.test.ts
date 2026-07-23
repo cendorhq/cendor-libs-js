@@ -96,13 +96,16 @@ describe('reasoning guard', () => {
     expect(injected!).toBeLessThanOrEqual(1200);
   });
 
-  it('clamp falls back to a block on an unsupported provider', async () => {
-    await withBudget({ tokens: 100, onExceed: 'clamp' }, async () => {
+  it('clamp falls back to a block when there is no output room', async () => {
+    // L2 (core 0.11.0 / tokenguard 0.6.0): Ollama's nested options.num_predict IS now clampable
+    // (covered in nested-clamp.test.ts). The block fallback survives when the projected input alone
+    // leaves no output room (allowance <= 0), regardless of provider.
+    await withBudget({ tokens: 1, onExceed: 'clamp' }, async () => {
       const call = new LLMCall({
         id: '1',
         provider: 'ollama',
         model: 'llama3',
-        messages: [{ role: 'user', content: 'hi' }],
+        messages: [{ role: 'user', content: 'a longer prompt that exceeds one token' }],
         metadata: { request_kwargs: {} },
       });
       expect(() => _preflightInterceptor(call)).toThrow(/clamp/);

@@ -29,6 +29,7 @@ import {
   UnknownModelError,
   addAmbientProvider,
   addInterceptor,
+  addStreamObserver,
   bus,
   prices,
   tokens,
@@ -42,11 +43,10 @@ import type { AmbientEvent, Decimal, Message, Sink } from '@cendor/core';
 const DEFAULT_OUTPUT_RESERVE = 256;
 
 /** Valid string values for `budget({ onExceed })` (a callable is also accepted). */
-const ON_EXCEED = ['raise', 'block', 'truncate', 'downgrade', 'clamp'] as const;
+const ON_EXCEED = ['raise', 'block', 'truncate', 'downgrade', 'clamp', 'break'] as const;
 
-/** Per-provider request kwarg that caps generated (reasoning + visible) output tokens, used by
- * `onExceed: 'clamp'`. Providers absent here can't have the cap injected safely (clamp falls back
- * to a hard block). */
+/** Per-provider *flat* request kwarg that caps generated output tokens, used by `onExceed: 'clamp'`.
+ * Bedrock/Ollama/Gemini nest the cap instead (see {@link clampDescriptor}). */
 const CLAMP_KWARG: Record<string, string> = {
   openai: 'max_completion_tokens',
   anthropic: 'max_tokens',
@@ -54,6 +54,16 @@ const CLAMP_KWARG: Record<string, string> = {
 
 const DEFAULT_MAX_RECORDS = 100_000;
 const DEFAULT_ON_UNPRICED = 'warn';
+
+/** Metadata key holding the mid-stream breaker's per-frame running state on the streamed `LLMCall`
+ * (collected with the call — no module-level leak). See {@link streamBreaker}. */
+const TG_BREAK_KEY = '_cendor_tokenguard_break';
+/** Metadata flag set on a call the breaker cut, so the post-flight settle does NOT raise a second
+ * `BudgetExceeded` (exactly one raise). */
+const TG_BROKEN_KEY = '_cendor_tokenguard_broken';
+/** Re-encode the accumulated new text exactly once it grows past this many chars (near the cap the
+ * breaker re-encodes every chunk). */
+const BREAK_RECOUNT_CHARS = 256;
 
 // --------------------------------------------------------------------------- errors + warnings
 
@@ -80,8 +90,9 @@ export class UnpricedModelWarning extends Error {
  * `budget_event` and an OpenTelemetry mirror can surface it in your APM/SIEM. A blocked call never
  * reaches the bus as an `LLMCall` (it's refused pre-flight), so this event is the *only* signal that
  * the breaker fired — exactly the governance action you want to alert on. `action` is `'blocked'` |
- * `'downgraded'` | `'clamped'`. Money fields are the Decimal rendered as a string; token fields are
- * numbers. Duck-typed by `acttrace` (no import), like `guardrails`' `GuardrailDecision`.
+ * `'downgraded'` | `'clamped'` | `'broken'` (the last for the mid-stream `onExceed: 'break'` cut).
+ * Money fields are the Decimal rendered as a string; token fields are numbers. Duck-typed by
+ * `acttrace` (no import), like `guardrails`' `GuardrailDecision`.
  */
 export class BudgetEvent {
   readonly action: string;
@@ -338,6 +349,107 @@ function ensureSubscribed(): void {
   addAmbientProvider(tokenguardAmbient); // idempotent; captures frames/tags pre-emit (GLR-5)
 }
 
+/** Register the mid-stream breaker on core's stream-observer seam. Called only when a break budget
+ * opens — a process that never uses `break` pays zero per-chunk cost (core's fast path holds). */
+function ensureBreakerArmed(): void {
+  addStreamObserver(streamBreaker);
+}
+
+/** The breaker's per-(stream, frame) running estimate. Lives on the streamed call's metadata. */
+interface BreakState {
+  allowance: number | null; // output-token headroom (null ⇒ not enforceable here)
+  counted: number; // exact tokens of the fully-encoded output segments
+  segment: string; // unbilled tail since the last exact re-encode
+  tripped: boolean;
+}
+
+/** A cheap, deliberately high token estimate (~3 chars/token) for the unbilled tail — only to
+ * decide *when* to re-encode exactly; the trip decision always uses the exact count. */
+function approxTokens(text: string): number {
+  return Math.floor(text.length / 3) + 1;
+}
+
+/** Convert a USD budget's remaining headroom to an integer output-token allowance, once per stream
+ * (Decimal math off the per-chunk hot path). `null` when the model is unpriced (warns once). */
+function usdOutputAllowance(call: LLMCall, frame: Frame, inputTokens: number): number | null {
+  let perOut: Decimal;
+  let inputCost: Decimal;
+  try {
+    perOut = prices.estimate(call.model, 0, { outputTokens: 1000 }).amount.div(1000);
+    inputCost = prices.estimate(call.model, inputTokens, { outputTokens: 0 }).amount;
+  } catch (err) {
+    if (err instanceof UnknownModelError) {
+      warnUnpriced(call.model, 'break');
+      return null;
+    }
+    throw err;
+  }
+  if (perOut.lessThanOrEqualTo(0)) return null;
+  const remaining = (frame.capUsd ?? new Dec(0)).minus(frame.spentUsd).minus(inputCost);
+  if (remaining.lessThanOrEqualTo(0)) return 0;
+  return Math.floor(Number(remaining.div(perOut)));
+}
+
+function initBreakState(call: LLMCall, frame: Frame): BreakState {
+  const inputTokens = call.messages.length > 0 ? tokens.count(call.messages, call.model) : 0;
+  let allowance: number | null = null;
+  if (frame.capTokens !== null) allowance = frame.capTokens - frame.spentTokens - inputTokens;
+  if (frame.capUsd !== null) {
+    const usdAllow = usdOutputAllowance(call, frame, inputTokens);
+    if (usdAllow !== null)
+      allowance = allowance === null ? usdAllow : Math.min(allowance, usdAllow);
+  }
+  if (allowance !== null) allowance -= frame.reasoningReserve; // reserve-aware early cut (GC-D2 D3)
+  return { allowance, counted: 0, segment: '', tripped: false };
+}
+
+/**
+ * Core stream observer for `onExceed: 'break'`: maintain a running output-token estimate as chunks
+ * arrive and **throw** {@link BudgetExceeded} the moment it crosses an active break frame's remaining
+ * budget — core then aborts the underlying stream and finalizes the call once (partial usage, flagged
+ * estimated). Visible thinking counts too. Check-not-accrue: `spent*` mutate only at settle, so there
+ * is exactly one raise.
+ */
+function streamBreaker(call: LLMCall, deltaText: string, deltaThinking: string): void {
+  const attached = ambientAttach.get(call);
+  const frames = attached ? attached.frames : currentFrames();
+  const breakFrames = frames.filter((f) => f.onExceed === 'break');
+  if (breakFrames.length === 0) return; // armed but no break budget on this stream — cheap path
+  let states = call.metadata[TG_BREAK_KEY] as Map<Frame, BreakState> | undefined;
+  if (states === undefined) {
+    states = new Map();
+    call.metadata[TG_BREAK_KEY] = states;
+  }
+  const newText = (deltaText || '') + (deltaThinking || ''); // both bill as output
+  for (let i = breakFrames.length - 1; i >= 0; i--) {
+    const frame = breakFrames[i]!; // innermost-first: the tightest cap trips first
+    let state = states.get(frame);
+    if (state === undefined) {
+      state = initBreakState(call, frame);
+      states.set(frame, state);
+    }
+    if (state.tripped || state.allowance === null) continue;
+    state.segment += newText;
+    if (
+      approxTokens(state.segment) + state.counted < state.allowance &&
+      state.segment.length < BREAK_RECOUNT_CHARS
+    ) {
+      continue; // far from the cap AND small tail — skip the exact re-encode
+    }
+    if (state.segment) {
+      state.counted += tokens.count(state.segment, call.model);
+      state.segment = '';
+    }
+    if (state.counted > state.allowance) {
+      state.tripped = true;
+      call.metadata[TG_BROKEN_KEY] = true; // settle must not raise again (exactly one raise)
+      const reason = `mid-stream break: streamed output ~${state.counted} tokens crossed the remaining budget (~${Math.max(state.allowance, 0)} left) for ${call.model}; the stream was cut. You keep the partial output; the provider bills to the cut (~one chunk + one RTT past).`;
+      emitBudgetEvent('broken', { call, frame, reason, projectedTokens: state.counted });
+      throw new BudgetExceeded(reason);
+    }
+  }
+}
+
 // --------------------------------------------------------------------------- projection helpers
 
 /**
@@ -529,30 +641,82 @@ export function _preflightInterceptor(call: unknown): unknown {
  * A caller's own tighter cap is respected; the only fall-back to a hard block is when the input
  * alone already exceeds the budget (no output room) or the provider can't take an injected ceiling.
  */
+/**
+ * Per-provider clamp injection plan: `{ existing, build, label }` (`build: null` ⇒ not safely
+ * injectable → hard block). OpenAI/Anthropic use a flat kwarg; Bedrock nests it at
+ * `inferenceConfig.maxTokens`, Ollama at `options.num_predict` (both copy-on-write merged); **Gemini
+ * merges only a plain-object `config` — a typed `GenerateContentConfig` can't be safely merged and
+ * blocks** (and its `max_output_tokens` does not bound hidden thinking — see docs).
+ */
+function clampDescriptor(call: LLMCall): {
+  existing: number | null;
+  build: ((t: number) => Record<string, unknown>) | null;
+  label: string | null;
+} {
+  const provider = call.provider;
+  const kwargs = (call.metadata.request_kwargs as Record<string, unknown> | undefined) ?? {};
+  const asInt = (v: unknown): number | null => (v == null ? null : Math.trunc(Number(v)));
+  if (provider in CLAMP_KWARG) {
+    const kwarg = CLAMP_KWARG[provider]!;
+    return { existing: asInt(kwargs[kwarg]), build: (t) => ({ [kwarg]: t }), label: kwarg };
+  }
+  if (provider === 'bedrock') {
+    const cfg = kwargs.inferenceConfig;
+    const base =
+      cfg != null && typeof cfg === 'object' ? { ...(cfg as Record<string, unknown>) } : {};
+    return {
+      existing: asInt(base.maxTokens),
+      build: (t) => ({ inferenceConfig: { ...base, maxTokens: t } }),
+      label: 'inferenceConfig.maxTokens',
+    };
+  }
+  if (provider === 'ollama') {
+    const opts = kwargs.options;
+    const base =
+      opts != null && typeof opts === 'object' ? { ...(opts as Record<string, unknown>) } : {};
+    return {
+      existing: asInt(base.num_predict),
+      build: (t) => ({ options: { ...base, num_predict: t } }),
+      label: 'options.num_predict',
+    };
+  }
+  if (provider === 'google') {
+    const cfg = kwargs.config;
+    // Only a plain-object config can be safely merged; a typed GenerateContentConfig instance is
+    // also typeof 'object' — distinguish by its constructor.
+    if (cfg != null && typeof cfg === 'object' && (cfg as object).constructor === Object) {
+      const base = { ...(cfg as Record<string, unknown>) };
+      return {
+        existing: asInt(base.max_output_tokens),
+        build: (t) => ({ config: { ...base, max_output_tokens: t } }),
+        label: 'config.max_output_tokens',
+      };
+    }
+    return { existing: null, build: null, label: null };
+  }
+  return { existing: null, build: null, label: null };
+}
+
 function clamp(call: LLMCall, frame: Frame): Reroute | null {
   if (frame.capTokens === null) return null;
   const projectedInput = tokens.count(call.messages, call.model);
   const allowance = frame.capTokens - frame.spentTokens - projectedInput;
-  const kwarg = CLAMP_KWARG[call.provider];
-  if (kwarg === undefined || allowance <= 0) {
+  const { existing, build, label } = clampDescriptor(call);
+  if (build === null || allowance <= 0) {
     const reason = `pre-flight clamp: cannot fit call within the remaining token budget (~${frame.capTokens - frame.spentTokens} left, ~${projectedInput} input; provider='${call.provider}', model=${call.model}) — use on_exceed='block' to reject, or raise the cap`;
     emitBudgetEvent('blocked', { call, frame, reason, projectedTokens: projectedInput });
     throw new BudgetExceeded(reason);
   }
-  const existingRaw = (call.metadata.request_kwargs as Record<string, unknown> | undefined)?.[
-    kwarg
-  ];
-  const existing = existingRaw == null ? null : Math.trunc(Number(existingRaw));
   if (existing !== null && existing <= allowance) return null; // caller's own cap already fits
   const target = existing === null ? allowance : Math.min(existing, allowance);
-  clampRows.push({ model: call.model, kwarg, limit: target, tags: { ...currentTags() } });
+  clampRows.push({ model: call.model, kwarg: label!, limit: target, tags: { ...currentTags() } });
   emitBudgetEvent('clamped', {
     call,
     frame,
-    reason: `injected ${kwarg}=${target} to bound output within the remaining token budget`,
+    reason: `injected ${label}=${target} to bound output within the remaining token budget`,
     projectedTokens: frame.spentTokens + projectedInput + target,
   });
-  return new Reroute({ [kwarg]: target });
+  return new Reroute(build(target));
 }
 
 // --------------------------------------------------------------------------- post-flight subscriber
@@ -649,9 +813,16 @@ function enforce(frame: Frame, call: LLMCall): void {
   }
   if (mode === 'truncate') throw new Truncated();
   if (mode === 'downgrade' || mode === 'clamp') return; // already handled pre-flight
-  throw new BudgetExceeded(
-    `budget exceeded: spent $${frame.spentUsd} > cap $${frame.capUsd} after ${frame.calls} call(s); last model=${call.model}. on_exceed='raise' is post-flight, so the cap is crossed by this one in-flight call — use on_exceed='block' for a pre-flight hard cap that never overspends.`,
-  );
+  if (mode === 'break' && call.metadata[TG_BROKEN_KEY]) return; // breaker already raised — one raise
+  let reason = `budget exceeded: spent $${frame.spentUsd} > cap $${frame.capUsd} after ${frame.calls} call(s); last model=${call.model}. `;
+  if (mode === 'break') {
+    reason +=
+      "on_exceed='break' cuts runaway streams mid-flight, but a call can still cross the cumulative cap post-flight — use on_exceed='block' for a pre-flight hard cap.";
+  } else {
+    reason +=
+      "on_exceed='raise' is post-flight, so the cap is crossed by this one in-flight call — use on_exceed='block' for a pre-flight hard cap that never overspends.";
+  }
+  throw new BudgetExceeded(reason);
 }
 
 // --------------------------------------------------------------------------- budget
@@ -707,6 +878,7 @@ function validateBudgetConfig(cfg: BudgetConfig): void {
 }
 
 function makeFrame(cfg: BudgetConfig): Frame {
+  if (cfg.onExceed === 'break') ensureBreakerArmed(); // register the stream observer only for break
   return new Frame({
     capUsd: cfg.usd == null ? null : new Dec(String(cfg.usd)),
     capTokens: cfg.tokens ?? null,

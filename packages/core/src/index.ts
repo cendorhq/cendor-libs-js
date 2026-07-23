@@ -18,11 +18,13 @@ export {
   MISS,
   Reroute,
   addInterceptor,
+  addStreamObserver,
   instrument,
   instrumentTool,
   removeInterceptor,
+  removeStreamObserver,
 } from './instrument.js';
-export type { Miss } from './instrument.js';
+export type { Miss, StreamObserver } from './instrument.js';
 export { addAmbientProvider, removeAmbientProvider } from './ambient.js';
 export type { AmbientEvent, AmbientProvider } from './ambient.js';
 export { currentTraceId, installTraceContext, trace } from './trace.js';

@@ -27,10 +27,14 @@
     "@cendor/core": "workspace:^"
   },
   "peerDependencies": {
-    "@huggingface/transformers": ">=3"
+    "@huggingface/transformers": ">=3",
+    "@opentelemetry/api": ">=1"
   },
   "peerDependenciesMeta": {
     "@huggingface/transformers": {
+      "optional": true
+    },
+    "@opentelemetry/api": {
       "optional": true
     }
   },

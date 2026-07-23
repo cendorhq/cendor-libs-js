@@ -65,6 +65,44 @@ function intercept(event: unknown): unknown {
   return MISS;
 }
 
+// --------------------------------------------------------------------------- stream observers
+
+/** A per-chunk stream observer, called `fn(call, deltaText, deltaThinking)` for every streamed
+ * chunk. **Throwing aborts the stream** (interceptor discipline). */
+export type StreamObserver = (call: LLMCall, deltaText: string, deltaThinking: string) => void;
+const streamObservers: StreamObserver[] = [];
+
+/**
+ * Register a per-chunk stream observer, called `fn(call, deltaText, deltaThinking)` for every chunk
+ * of every instrumented stream. **Throwing aborts the stream** (interceptor discipline): the
+ * underlying provider stream is closed, the `LLMCall` is finalized once with the partial (estimated)
+ * usage, and the error propagates to the consumer's `for await`. Idempotent.
+ *
+ * This is the generic core seam `@cendor/tokenguard`'s mid-stream budget breaker
+ * (`budget({ onExceed: 'break' })`) registers on; core itself learns no budget vocabulary (mirrors
+ * the ambient-provider discipline). `deltaText` is the visible text of this chunk; `deltaThinking`
+ * is any *visible* reasoning/thinking text (Anthropic `thinking_delta`, Ollama `message.thinking`,
+ * OpenAI-compat `reasoning_content`, Bedrock `reasoningContent`) — both extracted by core so an
+ * observer never parses a provider shape. Zero observers ⇒ one length check per chunk (hot path
+ * untouched when nothing is armed).
+ *
+ * @example
+ * ```ts
+ * import { addStreamObserver } from '@cendor/core';
+ * addStreamObserver((call, text, thinking) => {}); // inert; a throwing observer cuts the stream
+ * ```
+ */
+export function addStreamObserver(fn: StreamObserver): StreamObserver {
+  if (!streamObservers.includes(fn)) streamObservers.push(fn);
+  return fn;
+}
+
+/** Unregister a previously added stream observer (no error if absent). */
+export function removeStreamObserver(fn: StreamObserver): void {
+  const i = streamObservers.indexOf(fn);
+  if (i >= 0) streamObservers.splice(i, 1);
+}
+
 function uuidHex(): string {
   return globalThis.crypto.randomUUID().replace(/-/g, '');
 }
@@ -472,6 +510,14 @@ class StreamState {
           this.call.metadata.ttft_ms = performance.now() - this.start; // first live chunk (G23)
         }
         this.chunks.push(chunk);
+        if (streamObservers.length > 0) {
+          // Mid-stream observers (tokenguard breaker); zero ⇒ one length check. A throwing observer
+          // (a crossed budget cap) breaks out of the loop: `for await` calls the source iterator's
+          // `return()` (ES IteratorClose → the SDK stream aborts its controller), the `finally` below
+          // finalizes once (partial usage, flagged estimated — the crossing chunk is withheld from
+          // the consumer but kept for the settle), and the error propagates to the consumer.
+          this.observeChunk(chunk);
+        }
         yield chunk;
       }
     } finally {
@@ -479,8 +525,24 @@ class StreamState {
     }
   }
 
+  private observeChunk(chunk: unknown): void {
+    const deltaText = streamText(chunk, this.provider);
+    const deltaThinking = streamThinkingText(chunk, this.provider);
+    for (const fn of streamObservers) fn(this.call, deltaText, deltaThinking);
+  }
+
   private async closeUnderlying(): Promise<void> {
     const s = this.stream as unknown as Record<PropertyKey, unknown>;
+    // Belt for the explicit close()/aclose()/Symbol.asyncDispose path: abort the underlying fetch
+    // controller if the SDK stream exposes one (throwing-in-loop already aborts via IteratorClose).
+    const controller = s.controller as { abort?: () => void } | undefined;
+    if (controller != null && typeof controller.abort === 'function') {
+      try {
+        controller.abort();
+      } catch {
+        /* best-effort */
+      }
+    }
     const close = (s.close ?? s.aclose) as ((...a: unknown[]) => unknown) | undefined;
     if (typeof close === 'function') {
       const result = close.call(this.stream);
@@ -620,11 +682,20 @@ function streamUsage(chunks: unknown[], provider: string): Usage | null {
 
 function estimateStreamUsage(call: LLMCall, chunks: unknown[], provider: string): Usage | null {
   const text = chunks.map((ch) => streamText(ch, provider)).join('');
-  if (!text && call.messages.length === 0) return null;
+  const thinking = chunks.map((ch) => streamThinkingText(ch, provider)).join('');
+  if (!text && !thinking && call.messages.length === 0) return null;
   const inp = call.messages.length > 0 ? countTokens(call.messages, call.model) : 0;
-  const out = text ? countTokens(text, call.model) : 0;
+  const outVisible = text ? countTokens(text, call.model) : 0;
+  // Visible thinking (Anthropic thinking_delta, Ollama message.thinking, reasoning_content, Bedrock
+  // reasoningContent) is billed as output — fold it in and surface it as reasoning. Hidden reasoning
+  // (OpenAI-native/Gemini) never reaches the wire, so it stays invisible (the documented limit).
+  const outThinking = thinking ? countTokens(thinking, call.model) : 0;
   call.metadata.usage_estimated = true;
-  return new Usage({ inputTokens: inp, outputTokens: out });
+  return new Usage({
+    inputTokens: inp,
+    outputTokens: outVisible + outThinking,
+    reasoningTokens: outThinking,
+  });
 }
 
 export function streamText(chunk: unknown, provider: string): string {
@@ -652,6 +723,43 @@ export function streamText(chunk: unknown, provider: string): string {
     }
     if (provider === 'bedrock') {
       return String(get(get(get(chunk, 'contentBlockDelta'), 'delta'), 'text', '') ?? '');
+    }
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+/**
+ * Best-effort *visible* reasoning/thinking text of one chunk, per provider. Kept separate from
+ * {@link streamText} (which content capture reuses — folding thinking in would mislabel it): this
+ * feeds the offline estimate (output + reasoning) and the stream observers, so a mid-stream budget
+ * breaker counts visible thinking too. Hidden reasoning (OpenAI-native, Gemini) never reaches the
+ * wire, so it stays `''` here — the documented honest limit.
+ */
+export function streamThinkingText(chunk: unknown, provider: string): string {
+  try {
+    if (provider === 'anthropic') {
+      if (get(chunk, 'type') === 'content_block_delta') {
+        const delta = get(chunk, 'delta');
+        if (get(delta, 'type') === 'thinking_delta')
+          return String(get(delta, 'thinking', '') ?? '');
+      }
+      return '';
+    }
+    if (provider === 'openai' || provider === 'huggingface') {
+      // OpenAI-compatible reasoning_content (e.g. DeepSeek via the Chat Completions shape).
+      const choices = (get(chunk, 'choices') as unknown[]) ?? [];
+      return choices
+        .map((c) => String(get(get(c, 'delta'), 'reasoning_content', '') ?? ''))
+        .join('');
+    }
+    if (provider === 'ollama') {
+      return String(get(get(chunk, 'message'), 'thinking', '') ?? '');
+    }
+    if (provider === 'bedrock') {
+      const rc = get(get(get(chunk, 'contentBlockDelta'), 'delta'), 'reasoningContent');
+      return String(get(rc, 'text', '') ?? '');
     }
   } catch {
     return '';
