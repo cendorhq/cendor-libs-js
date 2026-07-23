@@ -1,5 +1,15 @@
 # @cendor/guardrails
 
+## 0.7.5
+
+### Patch Changes
+
+- 3f5b000: Declare `@opentelemetry/api` as an **optional** peer dependency (matching `@cendor/tokenguard`), so
+  the OpenTelemetry mirror / native counters resolve a compatible version when OTel is installed and
+  stay a clean no-op when it isn't. No runtime behavior change.
+- Updated dependencies [3f5b000]
+  - @cendor/core@0.11.0
+
 ## 0.7.4
 
 ### Patch Changes
