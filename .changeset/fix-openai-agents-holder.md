@@ -1,5 +1,0 @@
----
-"@cendor/core": patch
----
-
-Fix: `@cendor/core/openai-agents` now stamps the agent name on **live** calls. The OpenAI Agents SDK runs each model call in an async context isolated from the lifecycle listeners, so the `AsyncLocalStorage` set in a listener never reached the call — the name was silently dropped live (the offline fixture passed because it drove listeners + call in one context; `instrument()` always captured the call with real usage, so "the calls ride the standard client" held — only the name was missing). Now tracks the active agent in a process-wide holder read live at event construction. **Honest limit:** correct for sequential runs + handoffs (the common case); concurrent `runner.run()` in the same process may cross-attribute during overlap (per-run scoping is impossible — the SDK isolates the call's context from the listeners; run concurrent multi-agent workloads in separate processes). `@cendor/core/foundry` is unaffected (its `foundryAgentScope` is a synchronous callback wrap).
