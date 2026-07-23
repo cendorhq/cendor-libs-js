@@ -84,10 +84,21 @@ suite pins every re-export so drift fails the build. Since 1.13 / 0.18 the strea
 (Ollama `think`; OpenAI-compatible `reasoning_content`). Since **1.14 / 0.19** Anthropic streams
 incrementally in **both** languages (`text_delta` → `TextDelta`, `thinking_delta` → `ThinkingDelta`,
 tool `input_json_delta` reassembled), Anthropic gains **native structured output**
-(`output_config.format` json_schema on supported models; older models + Bedrock degrade to the
+(`output_config.format` json_schema on supported models; older models degrade to the
 JSON-instruction nudge), and Ollama/Bedrock accept **data-URL images** (Ollama `images[]`, Bedrock
 Converse image blocks; remote http(s) URLs are unsupported — no fetching). Bedrock `run.aio` no
-longer blocks the event loop (the blocking boto3 call is offloaded to a thread; Py). Honest limits
-(not yet ported this wave): streamed-run `conversation.id` grouping for multi-agent/streamed runs,
-TS guardrails re-ask / stream-window, streamed-run checkpoints, Bedrock forced-`toolChoice`
-structured output, and the finer TS span-attribute set — tracked for a follow-up.
+longer blocks the event loop (the blocking boto3 call is offloaded to a thread; Py). Since
+**1.15 / 0.20** the Phase-S follow-up closes the rest at parity in **both** languages: streamed +
+multi-agent runs stamp `conversation.id` from a keyed session (monitor grouping); the four Python
+stream generators prepare RAG **inside** the run scope (a retriever's embed is now attributed/
+collected/budgeted); `run.stream` / `run.astream` take a `checkpoint` (per-turn + per-segment saves,
+done-resume replays a lone `RunComplete`, an unfinished resume skips prepare and does not re-yield
+prior deltas); TS gains bounded output-block **re-ask** (`reaskOnOutputTrip`, non-streaming) +
+incremental **`streamCheckWindow`**; the TS span tree reaches Python parity (`gen_ai.system`,
+latency, finish_reason, streamed flag, error, tool arg-names; live child spans backdated by latency;
+a 3-level root → per-agent → call tree); and **Bedrock** gains forced-`toolChoice` structured output
+(a synthetic schema tool, **gated to tool-less agents** — it can't coexist with real tools on
+Converse; falls back to the JSON nudge otherwise). Honest limits: streaming re-ask is intentionally
+**not** offered in either language (parity — a streamed answer's deltas can't be unshown to re-ask);
+the Batch API stays post-hoc accounting only (no pre-flight is structurally possible) — see the
+`batch-ingest` cookbook recipe.
