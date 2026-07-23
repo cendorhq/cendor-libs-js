@@ -81,5 +81,13 @@ inheritance is CI-verified in both languages: `guard` is the identical acttrace 
 adapters + the similarity checks), `embed()` is governed pre-flight, and a parity/identity test
 suite pins every re-export so drift fails the build. Since 1.13 / 0.18 the streaming union adds
 `ThinkingDelta` — streamed reasoning kept separate from `TextDelta`, for providers that stream it
-(Ollama `think`; OpenAI-compatible `reasoning_content`); the TS SDK doesn't stream Anthropic, so
-Anthropic thinking is moot there, but the event exists in both languages.
+(Ollama `think`; OpenAI-compatible `reasoning_content`). Since **1.14 / 0.19** Anthropic streams
+incrementally in **both** languages (`text_delta` → `TextDelta`, `thinking_delta` → `ThinkingDelta`,
+tool `input_json_delta` reassembled), Anthropic gains **native structured output**
+(`output_config.format` json_schema on supported models; older models + Bedrock degrade to the
+JSON-instruction nudge), and Ollama/Bedrock accept **data-URL images** (Ollama `images[]`, Bedrock
+Converse image blocks; remote http(s) URLs are unsupported — no fetching). Bedrock `run.aio` no
+longer blocks the event loop (the blocking boto3 call is offloaded to a thread; Py). Honest limits
+(not yet ported this wave): streamed-run `conversation.id` grouping for multi-agent/streamed runs,
+TS guardrails re-ask / stream-window, streamed-run checkpoints, Bedrock forced-`toolChoice`
+structured output, and the finer TS span-attribute set — tracked for a follow-up.
