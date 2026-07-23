@@ -1,5 +1,12 @@
 # @cendor/tokenguard
 
+## 0.6.1
+
+### Patch Changes
+
+- Updated dependencies [84c2a2b]
+  - @cendor/core@0.12.0
+
 ## 0.6.0
 
 ### Minor Changes

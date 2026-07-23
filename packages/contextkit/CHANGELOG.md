@@ -1,5 +1,12 @@
 # @cendor/contextkit
 
+## 2.0.5
+
+### Patch Changes
+
+- Updated dependencies [84c2a2b]
+  - @cendor/core@0.12.0
+
 ## 2.0.4
 
 ### Patch Changes

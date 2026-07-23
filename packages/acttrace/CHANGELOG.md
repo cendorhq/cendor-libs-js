@@ -1,5 +1,12 @@
 # @cendor/acttrace
 
+## 0.11.3
+
+### Patch Changes
+
+- Updated dependencies [84c2a2b]
+  - @cendor/core@0.12.0
+
 ## 0.11.2
 
 ### Patch Changes
