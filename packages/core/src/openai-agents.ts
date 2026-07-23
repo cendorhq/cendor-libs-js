@@ -18,10 +18,14 @@
  * provider is registered the first time you call {@link observeOpenAIAgents}. If you never attach,
  * core's zero-provider fast path is untouched.
  *
- * **Honest limit.** The name is scoped per active agent turn (set at agent start / handoff, cleared
- * at agent end); handoffs — the SDK's primary multi-agent model — re-stamp correctly. Uses
- * `AsyncLocalStorage.enterWith` so a fire-and-return event listener can scope the following async
- * flow (a callback wrapper is impossible from a listener). Requires Node's async_hooks (Node ≥ 18).
+ * **Honest limit — process-wide, single-flight.** The SDK runs each model call in an async context
+ * **isolated** from the lifecycle listeners (verified: neither `AsyncLocalStorage.enterWith` nor a
+ * contextvar set in a listener reaches the call), so per-run scoping is impossible here. The active
+ * agent is instead tracked in a **process-wide holder** the listeners update (set at agent start /
+ * handoff, cleared at end) and the ambient provider reads live at each call — **correct for sequential
+ * runs and handoffs (the common case), but concurrent `runner.run()` in the same process may
+ * cross-attribute** agent names during overlap. Run concurrent multi-agent workloads in separate
+ * processes. (The LangChain handler gets a `runId` on every callback, so it has no such limit.)
  *
  * @example
  * ts-check: skip
@@ -37,7 +41,6 @@
  * await runner.run(new Agent({ name: 'Billing' }), 'refund my order');
  * ```
  */
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { addAmbientProvider } from './ambient.js';
 import type { AmbientProvider } from './ambient.js';
 
@@ -48,16 +51,17 @@ export interface AgentEventTarget {
   off?(event: string, listener: (...args: unknown[]) => void): unknown;
 }
 
-/** The agent currently executing a turn, scoped to the run's async flow. `enterWith` (not `run`) is
- * used because the SDK's listeners fire and return — they can't wrap the following code in a
- * callback. Set at agent start / handoff, cleared (undefined) at agent end. */
-const activeAgent = new AsyncLocalStorage<string>();
+/** The agent currently executing a turn — a **process-wide holder** (not context-scoped). The SDK
+ * runs each model call in an async context isolated from the listeners, so `AsyncLocalStorage` set in
+ * a listener never reaches the call; a plain holder read live at construction does. Set at agent start
+ * / handoff, cleared at agent end. Correct for sequential runs + handoffs; concurrent same-process
+ * `runner.run()` may cross-attribute (documented limit — one runner per process). */
+const active = { agent: '' };
 
-/** Ambient provider: stamp `agent` from the active-turn store. Undefined ⇒ nothing (core's
+/** Ambient provider: stamp `agent` from the active-turn holder. Empty ⇒ nothing (core's
  * never-overwrite seam keeps any explicit value). */
 const provider: AmbientProvider = () => {
-  const name = activeAgent.getStore();
-  return name ? { agent: name } : undefined;
+  return active.agent ? { agent: active.agent } : undefined;
 };
 
 /** The name of the last argument that looks like an Agent (an object with a string `name`). Handles
@@ -90,10 +94,10 @@ export function observeOpenAIAgents(target: AgentEventTarget): () => void {
 
   const onStartOrHandoff = (...args: unknown[]): void => {
     const name = lastAgentName(args);
-    if (name) activeAgent.enterWith(name);
+    if (name) active.agent = name;
   };
   const onEnd = (): void => {
-    activeAgent.enterWith(undefined as unknown as string);
+    active.agent = '';
   };
 
   target.on('agent_start', onStartOrHandoff);
@@ -107,7 +111,7 @@ export function observeOpenAIAgents(target: AgentEventTarget): () => void {
   };
 }
 
-/** Test helper: the active-agent store getter (so tests can assert scope behavior). Internal. */
+/** Test helper: the active-agent holder value (so tests can assert scope behavior). Internal. */
 export function _currentAgent(): string | undefined {
-  return activeAgent.getStore();
+  return active.agent || undefined;
 }
