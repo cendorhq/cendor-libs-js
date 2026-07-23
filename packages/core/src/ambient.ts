@@ -84,3 +84,8 @@ export function applyAmbient(event: AmbientEvent): void {
 export function _resetAmbient(): void {
   providers.length = 0;
 }
+
+/** Test helper: the number of registered providers (mirrors Python's `len(_providers)`). */
+export function _providerCount(): number {
+  return providers.length;
+}
