@@ -1,5 +1,13 @@
 # @cendor/tokenguard
 
+## 0.6.2
+
+### Patch Changes
+
+- 3487a13: `QueueSink` gains drop observability: an optional `onDropError(error, entry)` constructor callback and a `droppedRows()` counter. A row the inner sink's `write` throws on is now counted (and optionally surfaced) instead of being silently swallowed; the drain worker still survives both a bad row and a broken callback.
+- Updated dependencies [3487a13]
+  - @cendor/core@0.12.2
+
 ## 0.6.1
 
 ### Patch Changes
