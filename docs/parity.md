@@ -103,4 +103,10 @@ a 3-level root → per-agent → call tree); and **Bedrock** gains forced-`toolC
 Converse; falls back to the JSON nudge otherwise). Honest limits: streaming re-ask is intentionally
 **not** offered in either language (parity — a streamed answer's deltas can't be unshown to re-ask);
 the Batch API stays post-hoc accounting only (no pre-flight is structurally possible) — see the
-`batch-ingest` cookbook recipe.
+`batch-ingest` cookbook recipe. Since **1.16 / 0.21** the SDK emits **structural telemetry** at parity
+in both languages — opt-in `cendor.sdk` child spans for RAG (`rag.assemble`/`rag.compress`), memory
+(`memory.load`/`save`), orchestration handoffs, checkpoints, a first-class **tool** domain (source
+`local`|`mcp`, outcome `ok`|`error`|`blocked`), and **MCP** server attribution
+(`mcp.connect`/`mcp.list_tools`), plus a forward-compat `sdk_events` envelope; zero-core, content rules
+unchanged (labels/ids/counts, never bodies), rendered by **Cendor Monitor 0.9**'s SDK-door structure
+pages (Orchestration · Tools · MCP · RAG · Memory · Checkpoints).
