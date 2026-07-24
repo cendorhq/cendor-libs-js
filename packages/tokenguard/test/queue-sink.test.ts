@@ -133,6 +133,65 @@ describe('QueueSink', () => {
     expect(inner.rows).toEqual(range(50)); // all 50 preserved despite the small queue
   });
 
+  it('counts a failing inner write and keeps draining (M1)', async () => {
+    const bad = new Set([2, 5]);
+    const inner = new ListSink();
+    const q = new QueueSink({
+      write(entry: unknown): void {
+        if (bad.has(entry as number)) throw new Error(`cannot persist ${String(entry)}`);
+        inner.rows.push(entry);
+      },
+    });
+    for (let i = 0; i < 8; i++) q.write(i);
+    await q.flush();
+    expect(inner.rows).toEqual([0, 1, 3, 4, 6, 7]); // bad rows dropped, the rest kept in order
+    expect(q.droppedRows()).toBe(2); // the silent drops are now observable
+    await q.close();
+  });
+
+  it('fires onDropError per dropped row', async () => {
+    const seen: Array<[string, unknown]> = [];
+    const q = new QueueSink(
+      {
+        write(entry: unknown): void {
+          if (entry === 'boom') throw new Error('cannot persist boom');
+        },
+      },
+      { onDropError: (error, entry) => seen.push([String(error), entry]) },
+    );
+    q.write('ok');
+    q.write('boom');
+    await q.flush();
+    expect(q.droppedRows()).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]![1]).toBe('boom'); // (error, entry) delivered
+    expect(seen[0]![0]).toContain('cannot persist');
+    await q.close();
+  });
+
+  it('a broken onDropError callback does not kill the drainer', async () => {
+    const inner = new ListSink();
+    const q = new QueueSink(
+      {
+        write(entry: unknown): void {
+          if (entry === 'bad') throw new Error('inner failed');
+          inner.rows.push(entry);
+        },
+      },
+      {
+        onDropError: () => {
+          throw new Error('the callback itself is broken');
+        },
+      },
+    );
+    q.write('bad'); // inner throws → callback throws → both swallowed
+    q.write('good'); // drainer must still be alive to write this
+    await q.flush();
+    expect(inner.rows).toEqual(['good']);
+    expect(q.droppedRows()).toBe(1);
+    await q.close();
+  });
+
   it('wraps SQLite through the bus, off the hot path', async () => {
     const inner = new SQLiteSink(':memory:');
     const q = new QueueSink(inner);

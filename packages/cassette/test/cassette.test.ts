@@ -394,6 +394,18 @@ describe('rerecord', () => {
     expect(d[0]!.kind).toBe('llm');
     expect(readFileSync(path, 'utf-8')).toBe(before); // NOT overwritten
   });
+
+  it('shares one drift buffer across copies via the global symbol registry (M4)', () => {
+    // A second loaded copy of this package would initialize `_drift` from the SAME global-registry
+    // array, so drift() reflects writes made through that shared reference (dual-copy safety).
+    const host = globalThis as unknown as Record<symbol, Array<Record<string, unknown>>>;
+    const shared = host[Symbol.for('cendor.cassette.drift')];
+    expect(shared).toBe(_drift); // exported const IS the global-registry buffer
+    _drift.length = 0;
+    shared!.push({ request_hash: 'h', kind: 'llm', recorded: 1, live: 2 });
+    expect(drift()).toEqual([{ request_hash: 'h', kind: 'llm', recorded: 1, live: 2 }]);
+    _drift.length = 0; // clean up shared state for other tests
+  });
 });
 
 // --------------------------------------------------------------------------- pluggable normalizer

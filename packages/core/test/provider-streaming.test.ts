@@ -124,3 +124,65 @@ describe('instrument() — provider streaming usage recovery', () => {
     expect(c.metadata.usage_estimated).toBeUndefined();
   });
 });
+
+// P1 parity port (G1): boto-shaped converse_stream — an always-stream target whose iterable arrives
+// as the `stream` member of the response object. Mirrors PY test_core_captures_wl3.py L3 cases.
+describe('instrument() — Bedrock converse_stream (always-stream, member shape)', () => {
+  it('captures usage from the metadata event; response object + chunks pass through', async () => {
+    const streamEvents = [
+      { contentBlockDelta: { delta: { text: 'hel' } } },
+      { contentBlockDelta: { delta: { text: 'lo' } } },
+      { metadata: { usage: { inputTokens: 40, outputTokens: 12 } } },
+    ];
+    async function* gen() {
+      for (const e of streamEvents) yield e;
+    }
+    const client = {
+      converse: async (_p: unknown) => ({}), // present so detection keys off Bedrock
+      converse_stream: async (_p: unknown) => ({
+        stream: gen(),
+        ResponseMetadata: { HTTPStatusCode: 200 },
+      }),
+    };
+    instrument(client);
+    const response = (await client.converse_stream({
+      modelId: 'claude-sonnet-4-6',
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+    })) as { stream: AsyncIterable<unknown>; ResponseMetadata?: unknown };
+
+    expect(response.ResponseMetadata).toBeDefined(); // response object shape preserved
+    const got = await drain(response.stream);
+    expect(got).toEqual(streamEvents); // chunks pass through unchanged
+    expect(calls).toHaveLength(1);
+    const c = calls[0]!;
+    expect(c.provider).toBe('bedrock'); // public provider, not the internal bedrock_stream tag
+    expect(c.model).toBe('claude-sonnet-4-6'); // modelId extracted for the streaming target too
+    expect(c.usage?.inputTokens).toBe(40);
+    expect(c.usage?.outputTokens).toBe(12);
+    expect(c.metadata.usage_estimated).toBeUndefined(); // real usage from the metadata event
+  });
+
+  it('estimates thinking tokens from reasoningContent deltas when there is no metadata event', async () => {
+    const streamEvents = [
+      { contentBlockDelta: { delta: { reasoningContent: { text: 'thinking hard about it' } } } },
+      { contentBlockDelta: { delta: { text: 'final answer' } } },
+    ];
+    async function* gen() {
+      for (const e of streamEvents) yield e;
+    }
+    const client = {
+      converse: async (_p: unknown) => ({}),
+      converse_stream: async (_p: unknown) => ({ stream: gen() }),
+    };
+    instrument(client);
+    const response = (await client.converse_stream({
+      modelId: 'claude-sonnet-4-6',
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+    })) as { stream: AsyncIterable<unknown> };
+    await drain(response.stream);
+
+    const c = calls[0]!;
+    expect(c.metadata.usage_estimated).toBe(true); // no metadata event → offline estimate
+    expect(c.usage?.reasoningTokens ?? 0).toBeGreaterThan(0);
+  });
+});

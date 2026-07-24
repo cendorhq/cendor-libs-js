@@ -44,9 +44,17 @@ export type { CassetteStorage } from './storage.js';
 const FORMAT_VERSION = 2;
 const SUPPORTED_VERSIONS = [1, 2] as const;
 
-/** Divergences found by the most recent `mode: 'rerecord'` run. Mutated in place (never reassigned)
- * so external references (and {@link drift}) stay live — mirrors Python's module-global `_drift`. */
-export const _drift: Array<Record<string, unknown>> = [];
+/** Divergences found by the most recent `mode: 'rerecord'` run. Anchored on the global symbol
+ * registry — like core's `Symbol.for('cendor.*')` sentinels — so two loaded copies of this package
+ * share ONE buffer instead of each splitting off its own (the dual-copy hazard the 0.3.0
+ * ambient-session fix closed for sessions; drift is cassette-specific state that must not live in
+ * generic core). Mutated in place (never reassigned) so external references (and {@link drift}) stay
+ * live; mirrors Python's module-global `_drift`. */
+const DRIFT_KEY = Symbol.for('cendor.cassette.drift');
+const _driftHost = globalThis as unknown as Record<symbol, Array<Record<string, unknown>>>;
+const _driftBuffer: Array<Record<string, unknown>> = _driftHost[DRIFT_KEY] ?? [];
+_driftHost[DRIFT_KEY] = _driftBuffer; // first loader seeds the shared buffer; later copies reuse it
+export const _drift: Array<Record<string, unknown>> = _driftBuffer;
 
 /** Marks which record/replay context an event belongs to, so concurrent `using()` blocks on the
  * process-global bus don't capture each other's events (Python's `_active_session` ContextVar). */

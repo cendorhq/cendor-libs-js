@@ -157,7 +157,17 @@ function findTargets(client: unknown): Target[] {
   // `converse()`; first-class aws-sdk-v3 Bedrock support rides the SDK provider (Phase C), which wraps
   // the client directly. The usage/request/stream bedrock branches below are implemented regardless so
   // Phase C reuses them.
-  if (typeof c.converse === 'function') return [[c, 'converse', 'bedrock']];
+  if (typeof c.converse === 'function') {
+    const bedrock: Target[] = [[c, 'converse', 'bedrock']];
+    // A boto-shaped client also exposes converse_stream: no `stream` flag, and the iterable arrives
+    // as the `stream` member of the response object — an always-stream target. Mirrors the Python
+    // detection (instrument.py:290-292). aws-sdk-v3's send(ConverseStreamCommand) stays out of scope
+    // for the same reason converse itself is (no duck-typable method) — the SDK provider covers it.
+    if (typeof c.converse_stream === 'function') {
+      bedrock.push([c, 'converse_stream', 'bedrock_stream']);
+    }
+    return bedrock;
+  }
   // Legacy @google/generative-ai: `model.generateContent(...)` with the model id bound to the object
   // (read as modelDefault in instrument()).
   if (typeof c.generateContent === 'function') return [[c, 'generateContent', 'google']];
@@ -183,9 +193,21 @@ function findTargets(client: unknown): Target[] {
 const PUBLIC_PROVIDER: Record<string, string> = {
   openai_responses: 'openai',
   openai_embeddings: 'openai',
+  bedrock_stream: 'bedrock',
 };
 function publicProvider(provider: string): string {
   return PUBLIC_PROVIDER[provider] ?? provider;
+}
+
+/** Detection tags whose target is *always* streaming (there is no `stream: true` kwarg to key off —
+ * the iterable arrives via a fixed response shape). Bedrock's `converse_stream` is the only one. */
+const ALWAYS_STREAM = new Set<string>(['bedrock_stream']);
+
+/** Internal tag → the provider the stream extractors (`streamText`/`streamUsage`) should use for a
+ * wrapped stream. `bedrock_stream` reuses the plain `bedrock` branches. */
+const STREAM_PROVIDER: Record<string, string> = { bedrock_stream: 'bedrock' };
+function streamProvider(provider: string): string {
+  return STREAM_PROVIDER[provider] ?? provider;
 }
 
 /** Per-provider kwarg carrying request messages (so `Reroute({ messages })` rewrites the right field).
@@ -283,7 +305,7 @@ function wrap(orig: (...args: unknown[]) => Promise<unknown>, provider: string, 
     const rest = args.slice(1);
     const { call, start } = pre(provider, kwargs, args, modelDefault);
     ensureStreamUsageOptions(provider, kwargs);
-    const streaming = Boolean(kwargs.stream);
+    const streaming = Boolean(kwargs.stream) || ALWAYS_STREAM.has(provider);
     const runReal = (): Promise<unknown> => (hasOptions ? orig(kwargs, ...rest) : orig(...args));
     const directive = intercept(call);
     if (directive instanceof Reroute) {
@@ -393,8 +415,8 @@ function extractRequest(
       messages: texts.map((t) => ({ role: 'user', content: t })),
     };
   }
-  if (provider === 'bedrock') {
-    // Converse: modelId= (not model=) carries the model; messages= carries the turns.
+  if (provider === 'bedrock' || provider === 'bedrock_stream') {
+    // Converse / ConverseStream: modelId= (not model=) carries the model; messages= carries the turns.
     const messages = Array.isArray(kwargs.messages) ? (kwargs.messages as Message[]) : [];
     return { model: (kwargs.modelId as string) ?? '', messages };
   }
@@ -590,23 +612,27 @@ function wrapStream(state: StreamState): AsyncIterable<unknown> {
   ) as unknown as AsyncIterable<unknown>;
 }
 
-function proxyStream(
-  call: LLMCall,
-  stream: unknown,
-  provider: string,
-  start: number,
-): AsyncIterable<unknown> {
-  return wrapStream(new StreamState(call, stream as AsyncIterable<unknown>, provider, start));
+function proxyStream(call: LLMCall, stream: unknown, provider: string, start: number): unknown {
+  const sp = streamProvider(provider);
+  // Bedrock converse_stream returns the iterable as the `stream` member of a response object — wrap
+  // that member and hand the object back unchanged, so `for await (const e of response.stream)` still
+  // works. Every other provider returns the iterable directly. (Mirrors Python's _proxy_stream.)
+  if (provider === 'bedrock_stream') {
+    const resp = (stream ?? {}) as Record<string, unknown>;
+    const proxy = wrapStream(
+      new StreamState(call, resp.stream as AsyncIterable<unknown>, sp, start),
+    );
+    return { ...resp, stream: proxy };
+  }
+  return wrapStream(new StreamState(call, stream as AsyncIterable<unknown>, sp, start));
 }
 
-function replayStream(
-  call: LLMCall,
-  recorded: unknown,
-  provider: string,
-  start: number,
-): AsyncIterable<unknown> {
+function replayStream(call: LLMCall, recorded: unknown, provider: string, start: number): unknown {
   const chunks = Array.isArray(recorded) ? [...recorded] : recorded == null ? [] : [recorded];
-  return wrapStream(new StreamState(call, fromArray(chunks), provider, start, chunks));
+  const proxy = wrapStream(
+    new StreamState(call, fromArray(chunks), streamProvider(provider), start, chunks),
+  );
+  return provider === 'bedrock_stream' ? { stream: proxy } : proxy;
 }
 
 function finalizeStream(call: LLMCall, chunks: unknown[], provider: string, start: number): void {

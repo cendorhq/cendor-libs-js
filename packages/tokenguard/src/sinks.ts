@@ -116,6 +116,10 @@ export interface QueueSinkOptions {
   /** Bound the in-flight queue; when full, `write()` awaits room (back-pressure — never drops a
    * row). `null`/omitted is unbounded. */
   maxQueue?: number | null;
+  /** Called once per row the drainer drops because the inner sink's `write` **threw** (disk full, DB
+   * locked). Receives `(error, entry)`. Its own throws are swallowed so it can't kill the drainer.
+   * See {@link QueueSink.droppedRows}. */
+  onDropError?: (error: unknown, entry: unknown) => void;
 }
 
 /**
@@ -128,11 +132,14 @@ export interface QueueSinkOptions {
  * plus an async drain loop. Observable semantics are preserved: FIFO order, no dropped rows under
  * bounded back-pressure (`write` returns a Promise when it must await room), `write`-after-`close`
  * throws, idempotent `close`, inner `flush`→`close` ordering at close, and a bad inner-write does
- * not kill the drainer.
+ * not kill the drainer. A row the inner sink's `write` **throws** on is dropped so the failure can't
+ * kill the drainer — those drops are observable via {@link droppedRows} and the `onDropError` option.
  */
 export class QueueSink {
   private readonly inner: Sink;
   private readonly maxQueue: number | null;
+  private readonly onDropError: ((error: unknown, entry: unknown) => void) | null;
+  private dropped = 0;
   private readonly items: unknown[] = [];
   private closed = false;
   private shutdownRequested = false;
@@ -145,7 +152,14 @@ export class QueueSink {
   constructor(inner: Sink, opts: QueueSinkOptions = {}) {
     this.inner = inner;
     this.maxQueue = opts.maxQueue && opts.maxQueue > 0 ? opts.maxQueue : null;
+    this.onDropError = opts.onDropError ?? null;
     this.worker = this.run();
+  }
+
+  /** Number of rows dropped because the inner sink's `write` threw (never kills the drainer). `0` in
+   * the healthy path; a rising count flags a failing durable sink. */
+  droppedRows(): number {
+    return this.dropped;
   }
 
   private wake(): void {
@@ -179,8 +193,16 @@ export class QueueSink {
       if (item === SHUTDOWN) return;
       try {
         await Promise.resolve(this.inner.write(item));
-      } catch {
-        // a bad row must not kill the worker — drop it and carry on
+      } catch (error) {
+        // a bad row must not kill the worker — count it, notify, and carry on
+        this.dropped += 1;
+        if (this.onDropError !== null) {
+          try {
+            this.onDropError(error, item);
+          } catch {
+            // a broken callback must not kill the worker either
+          }
+        }
       }
     }
   }
