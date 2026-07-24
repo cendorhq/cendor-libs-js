@@ -109,4 +109,11 @@ in both languages — opt-in `cendor.sdk` child spans for RAG (`rag.assemble`/`r
 `local`|`mcp`, outcome `ok`|`error`|`blocked`), and **MCP** server attribution
 (`mcp.connect`/`mcp.list_tools`), plus a forward-compat `sdk_events` envelope; zero-core, content rules
 unchanged (labels/ids/counts, never bodies), rendered by **Cendor Monitor 0.9**'s SDK-door structure
-pages (Orchestration · Tools · MCP · RAG · Memory · Checkpoints).
+pages (Orchestration · Tools · MCP · RAG · Memory · Checkpoints). Since **1.17 / 0.21.1** the
+multi-agent pipeline shapes reach behaviour parity: `sequential` / `parallel` / `parallel_async`
+honour the per-run governance surface (`retry`, `on_step`, `guardrails` → `Result.guardrail_decisions`)
+and `supervisor` delegates to the full team runner (`run_agents` / `runAgents`) with
+`session` / `checkpoint` — `session` / `checkpoint` stay **team-only** for the pipe shapes (no single
+conversation to persist) and `guardrail_mode` is a single-agent-run option. The Python `run.astream`
+`checkpoint=` no-op is fixed (it was accepted but not forwarded until 1.17 — now at parity with
+`run.stream` and the TypeScript twin).
