@@ -30,3 +30,8 @@ updates:
       # fast-check 4: dev-only property-testing major — its own separate decision.
       - dependency-name: "fast-check"
         update-types: ["version-update:semver-major"]
+      # better-sqlite3 13+: crashes Node 20 vitest workers (PR #13 closed 2026-07-24). We keep Node 20
+      # support until the public flip, so stay on 12.x. REMOVE this ignore and take 13.x when Node 20
+      # is dropped from the CI matrix.
+      - dependency-name: "better-sqlite3"
+        update-types: ["version-update:semver-major"]
