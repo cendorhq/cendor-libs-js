@@ -37,6 +37,12 @@
 
 ## 2.0.0
 
+> Note: the jump to `2.0.0` was an automatic **major** bump emitted by changesets — **not** a breaking
+> API change. The `@cendor/squeeze` peer dependency was versioned out of its previous `^0.2.x` range at
+> `0.3.0`, and with `onlyUpdatePeerDependentsWhenOutOfRange` that forces a major on the dependent. The
+> public `@cendor/contextkit` API is unchanged. Versions are independent per-language (see the parity
+> page), so a `2.0.0` alongside `0.x` siblings is expected. (Same shape as the `1.0.0` note below.)
+
 ### Patch Changes
 
 - Updated dependencies [ec4be36]

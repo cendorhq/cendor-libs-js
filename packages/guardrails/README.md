@@ -2,6 +2,10 @@
 
 [![npm version](https://img.shields.io/npm/v/@cendor/guardrails.svg)](https://www.npmjs.com/package/@cendor/guardrails) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+```bash
+npm i @cendor/guardrails
+```
+
 A local-first **gate** for LLM apps: define a check — keyword, regex, URL, length, JSON-schema —
 attach it to a stage (`input`, `tool_call`, `tool_output`, `output`), and block, redact, or flag
 before the model or a tool ever runs. The TypeScript port of `cendor.guardrails`.

@@ -2,6 +2,10 @@
 
 [![npm version](https://img.shields.io/npm/v/@cendor/tokenguard.svg)](https://www.npmjs.com/package/@cendor/tokenguard) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+```bash
+npm i @cendor/tokenguard
+```
+
 Spending limits for LLM calls: stop a call before it runs if it would blow the budget, and see cost broken down per feature. The TypeScript port of `cendor.tokenguard`.
 
 tokenguard **subscribes** to `@cendor/core`'s event bus and registers a pre-flight interceptor — it

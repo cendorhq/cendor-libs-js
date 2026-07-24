@@ -2,6 +2,10 @@
 
 [![npm version](https://img.shields.io/npm/v/@cendor/squeeze.svg)](https://www.npmjs.com/package/@cendor/squeeze) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+```bash
+npm i @cendor/squeeze
+```
+
 Shrink long prompts to hit a token budget and expand them back exactly — the same input always produces the same output, with no LLM and no model download. Compression returns a *handle*; the original is always restorable, byte-for-byte. The TypeScript port of [`cendor-squeeze`](https://github.com/cendorhq/cendor-libs).
 
 The TypeScript port of [`cendor-squeeze`](https://github.com/cendorhq/cendor-libs). Satisfies
