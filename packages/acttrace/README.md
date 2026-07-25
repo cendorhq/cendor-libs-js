@@ -25,6 +25,16 @@ preserved, `prev_hash` text-prepended, `GENESIS` = 64 zeros).
 
 Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Python) wires it up — or point it at [cendor.ai/docs/for-ai-assistants](https://cendor.ai/docs/for-ai-assistants).
 
+
+## The mirror attaches itself (0.12.0)
+
+With OpenTelemetry installed and a provider configured **by your app**, `new AuditLog('support', { path: 'audit.jsonl' })` also streams every
+chained entry to your backend as an `audit.<type>` span — no `mirror=` line. Pass { mirror: false } to never mirror
+a log, your own sink to use exactly that one, or set `CENDOR_TELEMETRY=off` to stop all Cendor
+telemetry. **The mirror is an operational copy**: the hash-chained file (or a signed `export()` pack)
+stays the only artifact `verify()` checks, and a failing mirror is swallowed rather than breaking the
+chain.
+
 ## Killer example
 
 ```ts

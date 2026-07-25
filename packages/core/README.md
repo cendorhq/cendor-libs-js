@@ -12,6 +12,17 @@ npm i openai @anthropic-ai/sdk
 
 Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Python) wires it up — or point it at [cendor.ai/docs/for-ai-assistants](https://cendor.ai/docs/for-ai-assistants).
 
+
+## Telemetry: it flows (and `CENDOR_TELEMETRY=off` stops it)
+
+Since **0.15.0**, with OpenTelemetry installed and a provider configured **by your app**, core emits
+`gen_ai.*` spans for every governed call as soon as you call `instrument()` — plus `governance.*` spans
+for the budget/guardrail decisions the other libraries make. No emitter to attach, no exporter to
+install: core has **no endpoint of its own** and emits into your provider. `CENDOR_TELEMETRY=off` turns
+it off process-wide; `CENDOR_DEBUG_TELEMETRY=1` prints one line saying what was detected; `otel.telemetryMode()` / `providerConfigured()` let
+you check the state yourself. With OpenTelemetry absent, nothing is subscribed and behaviour is
+byte-identical.
+
 ## Killer example — wrap once, get cost + tokens on every call
 
 ```ts

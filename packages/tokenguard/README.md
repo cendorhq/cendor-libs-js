@@ -59,6 +59,14 @@ for (const row of report(['feature'])) {
 | `onUnpricedWarning(fn)` | Register a listener for unpriced-model warnings (returns an unsubscribe). |
 | `@cendor/tokenguard/sinks` | `SQLiteSink`, `QueueSink`, `OTelSink`. |
 
+**Spend reaches your backend on its own (0.8.0).** With `@opentelemetry/api` installed and a provider
+configured by your app, every priced row is also written to `gen_ai.client.token.usage` / `.cost.usd`
+counters through an **internal additive tap** (dimensioned by `model` + your `track(...)` tags) — no
+`useSink` line needed. `CENDOR_TELEMETRY=off` disables it. Your sink slot stays yours: the tap never
+displaces it, and it stands down when your own sink already *is* an `OTelSink`. Since **0.7.0**
+`OTelSink` acquires its meter lazily, so constructing one before your provider is no longer a
+permanent silent no-op.
+
 **`onExceed` modes:** `'raise'` (post-flight, stops the *next* call — overshoots by one),
 `'block'` (pre-flight hard cap — never overspends), `'clamp'` (inject a provider output ceiling —
 requires `tokens=`), `'downgrade'` (reroute to a cheaper model — requires `usd=` + a `downgrade`
