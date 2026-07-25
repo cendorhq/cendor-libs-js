@@ -178,11 +178,15 @@ describe('the telemetry switch', () => {
   });
 
   it('the predicate is cheap enough to run per event', () => {
+    // A regression guard, not a benchmark: it catches the class of mistake this code actually made —
+    // loading `@opentelemetry/api` per call cost ~90 µs, 45× the call it observes. The bound is loose
+    // on purpose (a shared CI runner is an order slower than a quiet machine) and nothing published
+    // depends on it.
     const n = 5000;
     const start = performance.now();
     for (let i = 0; i < n; i++) otel.providerConfigured();
     const perCallUs = ((performance.now() - start) / n) * 1000;
-    expect(perCallUs).toBeLessThan(2);
+    expect(perCallUs).toBeLessThan(20);
   });
 
   it('CENDOR_DEBUG_TELEMETRY=1 prints one line, and nothing without it', async () => {
