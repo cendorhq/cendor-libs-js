@@ -455,6 +455,7 @@ function internalProvider(call: LLMCall, pub: string): string {
 interface DepthStore {
   getStore(): number | undefined;
   enterWith(value: number): void;
+  run<T>(value: number, fn: () => T): T;
 }
 
 const liveSpanStore: DepthStore | null = (() => {
@@ -492,6 +493,24 @@ export function enterLiveSpans(): void {
  */
 export function liveSpansActive(): boolean {
   return liveSpanDepth() > 0;
+}
+
+/**
+ * Run `fn` with the live-spans depth **isolated**: whatever `enterLiveSpans` does inside is confined
+ * to `fn` and cannot leak into the caller's context.
+ *
+ * Why this exists: `enterWith` mutates the *current* async resource's store, and an async function's
+ * body starts in its **caller's** context — so a scope opened by `run()` would bind the caller, while
+ * the matching close (after an `await`) binds only the resumed continuation. The caller would be left
+ * latched: every later libs-only call in that context silently loses its span, and two concurrent
+ * `run()`s would share one latch (the second seeing "a scope is already open"). Isolating the store
+ * for the duration makes the automatic scope airtight without changing the public enter/exit API.
+ *
+ * @internal used by the SDK's automatic run scope.
+ */
+export function _isolateLiveSpans<T>(fn: () => T): T {
+  if (!liveSpanStore) return fn();
+  return liveSpanStore.run(liveSpanDepth(), fn);
 }
 
 /** Called by the SDK when a `liveSpans` context closes. */
