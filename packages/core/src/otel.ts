@@ -444,17 +444,23 @@ function internalProvider(call: LLMCall, pub: string): string {
 // spans, so a libs-only app (no SDK) lights up a trace-based monitor. Honors content capture.
 // =================================================================================================
 
-// -------------------------------------------------------------------- live-spans latch (P1 fix)
-// The depth is CONTEXT-LOCAL, matching Python's ContextVar. It used to be a module global, which made
-// one open `liveSpans` scope suppress the emitter for **every** concurrent async context in the
-// process: a TS app mixing an SDK run with concurrent libs-only calls silently lost the flat spans for
-// the latter, and an UNCLOSED handle (the JS API needs an explicit `close()`) stuck the latch forever,
-// killing the emitter process-wide. AsyncLocalStorage.enterWith sets the depth for the current
-// execution context and its descendants only, so a sibling flow that never entered keeps depth 0.
-// Off-Node runtimes (no `node:async_hooks`) fall back to the historical module counter.
+// ---------------------------------------------------------------- live-spans latch (P1 / W0.5)
+// Two mechanisms, because the public API has two shapes:
+//
+//  * `enterLiveSpans()` / `exitLiveSpans()` are callback-LESS (a `liveSpans()` handle is closed by
+//    hand), so they move a module counter: while a manual scope is open the emitter stands down
+//    process-wide. That is the historical behaviour, and the shape of the API forces it.
+//  * `_withLiveSpansDepth(fn)` is the SCOPED form the SDK's automatic run scope uses. It raises the
+//    depth inside an `AsyncLocalStorage.run()`, which is correctly scoped on **every** supported Node:
+//    concurrent automatic runs never suppress each other's flat spans, and no depth survives a run.
+//
+// Why not `enterWith` for both: measured 2026-07-25 on node 20.20 / 22.23 (legacy AsyncLocalStorage),
+// an `enterWith` LEAKS into concurrent flows and is NOT restored by the matching exit — a scope that
+// closed would leave the emitter suppressed for the rest of the process. Only node >= 24
+// (AsyncContextFrame) scopes `enterWith` the way this code would need. `run()` is correct on all of
+// them, so the scoped path uses only that.
 interface DepthStore {
   getStore(): number | undefined;
-  enterWith(value: number): void;
   run<T>(value: number, fn: () => T): T;
 }
 
@@ -466,23 +472,55 @@ const liveSpanStore: DepthStore | null = (() => {
     };
     return new AsyncLocalStorage();
   } catch {
-    return null; // non-Node runtime — the global counter below is the fallback
+    return null; // non-Node runtime — the module counter is then the only mechanism
   }
 })();
-let liveSpanDepthFallback = 0;
+let liveSpanDepthCounter = 0;
 
 function liveSpanDepth(): number {
-  return liveSpanStore ? (liveSpanStore.getStore() ?? 0) : liveSpanDepthFallback;
+  return liveSpanDepthCounter + (liveSpanStore?.getStore() ?? 0);
 }
 
-/** Called by the SDK when a `liveSpans` context opens, so the G20 emitter stands down (this async
- * context and its children only). */
-export function enterLiveSpans(): void {
-  if (liveSpanStore) liveSpanStore.enterWith(liveSpanDepth() + 1);
-  else liveSpanDepthFallback += 1;
-}
 /**
- * True while an SDK `liveSpans` scope is open in this async context.
+ * Run `fn` with the live-spans depth raised for `fn` and everything it starts — and nothing else.
+ *
+ * The scoped counterpart of {@link enterLiveSpans}, used by the SDK's automatic run scope. Correct on
+ * every supported Node (it uses `AsyncLocalStorage.run`, never `enterWith`), so two concurrent
+ * automatic runs cannot suppress each other's flat spans and no depth survives the run.
+ *
+ * @internal
+ */
+export function _withLiveSpansDepth<T>(fn: () => T): T {
+  if (!liveSpanStore) {
+    liveSpanDepthCounter += 1;
+    try {
+      return fn();
+    } finally {
+      liveSpanDepthCounter = Math.max(0, liveSpanDepthCounter - 1);
+    }
+  }
+  return liveSpanStore.run((liveSpanStore.getStore() ?? 0) + 1, fn);
+}
+
+/**
+ * Called by the SDK when a `liveSpans` context opens, so the G20 emitter stands down.
+ *
+ * **Process-wide while the handle is open** — a hand-closed handle has no scope to bind to. The SDK's
+ * automatic run scope uses the scoped form instead, so prefer that; with a manual handle, keep its
+ * lifetime short and always `close()` it in a `finally`.
+ */
+export function enterLiveSpans(): void {
+  liveSpanDepthCounter += 1;
+}
+
+/** Called by the SDK when a `liveSpans` context closes. */
+export function exitLiveSpans(): void {
+  liveSpanDepthCounter = Math.max(0, liveSpanDepthCounter - 1);
+}
+
+/**
+ * True while a `liveSpans` scope is open — a manual one anywhere in the process, or an automatic one
+ * in this async context.
  *
  * The SDK reads it to decide whether to open its **automatic** run scope: an explicit `liveSpans()`
  * the user opened always wins, so a run is never wrapped twice.
@@ -496,27 +534,13 @@ export function liveSpansActive(): boolean {
 }
 
 /**
- * Run `fn` with the live-spans depth **isolated**: whatever `enterLiveSpans` does inside is confined
- * to `fn` and cannot leak into the caller's context.
+ * Run `fn` with the ambient live-spans depth pinned, so a nested scope cannot leak past `fn`.
  *
- * Why this exists: `enterWith` mutates the *current* async resource's store, and an async function's
- * body starts in its **caller's** context — so a scope opened by `run()` would bind the caller, while
- * the matching close (after an `await`) binds only the resumed continuation. The caller would be left
- * latched: every later libs-only call in that context silently loses its span, and two concurrent
- * `run()`s would share one latch (the second seeing "a scope is already open"). Isolating the store
- * for the duration makes the automatic scope airtight without changing the public enter/exit API.
- *
- * @internal used by the SDK's automatic run scope.
+ * @internal kept for the SDK's stream path, which needs a stable depth across a generator's lifetime.
  */
 export function _isolateLiveSpans<T>(fn: () => T): T {
   if (!liveSpanStore) return fn();
-  return liveSpanStore.run(liveSpanDepth(), fn);
-}
-
-/** Called by the SDK when a `liveSpans` context closes. */
-export function exitLiveSpans(): void {
-  if (liveSpanStore) liveSpanStore.enterWith(Math.max(0, liveSpanDepth() - 1));
-  else liveSpanDepthFallback = Math.max(0, liveSpanDepthFallback - 1);
+  return liveSpanStore.run(liveSpanStore.getStore() ?? 0, fn);
 }
 
 interface RichSpan {
