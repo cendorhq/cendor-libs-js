@@ -561,6 +561,119 @@ function renderBusEvent(tr: RichTracer, ev: unknown): void {
   if (liveSpanDepth() > 0) return;
   if (ev instanceof LLMCall) emitLlmSpan(tr, ev);
   else if (ev instanceof ToolCall) emitToolSpan(tr, ev);
+  else emitGovernanceSpan(tr, ev);
+}
+
+// =================================================================================================
+// Option C (DR-2c) — governance ENFORCEMENT as ordinary telemetry.
+//
+// A telemetry user wants to see the decisions their stack made: a budget that blocked a call, a
+// guardrail that tripped. Until now the only wire path for those was the *audit mirror*, so seeing
+// them meant adopting the evidence library. Option C renders them as plain monitoring spans:
+//
+//   governance.budget_event · governance.guardrail_decision   (scope cendor.core / cendor.sdk)
+//
+// Deliberately **no `audit.*` vocabulary and no AuditLog involved** (rule 6): these are operational
+// signals, and "audit" keeps meaning the hash-chained evidence file. While a real audit mirror is on
+// the wire the ops renderings stand down, so nothing renders twice.
+//
+// Content: metadata only. The events' `reason` strings are NOT emitted — a guardrail's reason comes
+// from the rule, and for `rules.llmJudge` from a judge *model* (free text that can paraphrase the
+// payload; the URL rules embed the matched host), so it can carry input-derived text. The audit chain
+// — an artifact the user explicitly declared — keeps carrying it; these default-on spans do not.
+// =================================================================================================
+
+/** How many live audit mirrors are on the wire (refcounted by `@cendor/acttrace`). */
+let govMirrors = 0;
+
+/**
+ * Tell core that an audit mirror is (or is no longer) putting governance on the wire.
+ *
+ * Called by `@cendor/acttrace` when an `AuditLog` attaches or detaches a mirror that emits
+ * OpenTelemetry spans. Refcounted, so several logs compose. While the count is above zero the Option C
+ * `governance.*` spans stand down — the mirror is richer (chained, hashed, sequenced) and must win,
+ * and an event must never render twice.
+ */
+export function governanceMirrored(on: boolean): void {
+  govMirrors = Math.max(0, govMirrors + (on ? 1 : -1));
+}
+
+/** True while at least one audit mirror is putting governance on the wire. */
+export function governanceMirrorActive(): boolean {
+  return govMirrors > 0;
+}
+
+/** @internal Test helper: forget the mirror refcount. */
+export function _resetGovernanceMirrors(): void {
+  govMirrors = 0;
+}
+
+/**
+ * Map an enforcement event to `[span name, cendor.gov.* attrs]`, or `null` if it isn't one.
+ *
+ * Duck-typed exactly like `@cendor/acttrace`'s chaining (core imports no tool — rule 2). Only the
+ * factual fields: what acted, at which stage, with which numbers.
+ *
+ * @internal also used by `@cendor/sdk` to render the same decision as a child of its run root.
+ */
+export function _govAttrs(ev: unknown): [string, Record<string, unknown>] | null {
+  if (ev == null || typeof ev !== 'object') return null;
+  const e = ev as Record<string, unknown>;
+  const has = (k: string): boolean => k in e;
+  // tokenguard BudgetEvent
+  if (has('action') && has('projectedUsd') && has('capUsd')) {
+    return [
+      'governance.budget_event',
+      {
+        'cendor.gov.type': 'budget_event',
+        'cendor.gov.action': String(e.action ?? ''),
+        'cendor.gov.budget': e.name ?? null,
+        'cendor.gov.scope': e.scope ?? null,
+        'cendor.gov.model': e.model || null,
+        'cendor.gov.to_model': e.toModel ?? null,
+        'cendor.gov.projected_usd': e.projectedUsd == null ? null : String(e.projectedUsd),
+        'cendor.gov.cap_usd': e.capUsd == null ? null : String(e.capUsd),
+        'cendor.gov.projected_tokens': e.projectedTokens ?? null,
+        'cendor.gov.cap_tokens': e.capTokens ?? null,
+      },
+    ];
+  }
+  // guardrails GuardrailDecision
+  if (has('guardrail') && has('stage') && has('action')) {
+    return [
+      'governance.guardrail_decision',
+      {
+        'cendor.gov.type': 'guardrail_decision',
+        'cendor.gov.guardrail': String(e.guardrail ?? ''),
+        'cendor.gov.stage': String(e.stage ?? ''),
+        'cendor.gov.action': String(e.action ?? ''),
+        'cendor.gov.agent': e.agent || null,
+        'cendor.gov.tool': e.tool || null,
+      },
+    ];
+  }
+  return null;
+}
+
+/** Render an enforcement event as a `governance.*` span (Option C). Zero-duration: a decision is a
+ * point in time, not an operation with a span of work. */
+function emitGovernanceSpan(tr: RichTracer, ev: unknown): void {
+  if (governanceMirrorActive()) return; // the audit mirror is on the wire — it wins
+  const mapped = _govAttrs(ev);
+  if (mapped === null) return;
+  const [name, attrs] = mapped;
+  const now = Date.now();
+  const span = tr.startSpan(name, { startTime: now });
+  try {
+    for (const [key, value] of Object.entries(attrs)) {
+      if (value !== null && value !== undefined) span.setAttribute(key, value);
+    }
+    const traceId = (ev as { traceId?: string }).traceId;
+    // The monitor joins this to the run row exactly like a chat span's cendor.trace_id.
+    if (traceId) span.setAttribute('cendor.trace_id', traceId);
+  } finally {
+    span.end(now);
+  }
 }
 
 // =================================================================================================

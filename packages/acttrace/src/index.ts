@@ -456,6 +456,31 @@ export interface AuditLogOptions {
  * what evidence *is* — the hash-chained file (or a signed `export()`) stays the only artifact
  * `verify()` checks, and nothing here creates an `AuditLog` the user did not create.
  */
+/** True when this mirror (or a wrapper around it) emits OpenTelemetry spans. */
+function mirrorReachesTheWire(mirror: unknown): boolean {
+  let candidate = mirror;
+  for (let i = 0; i < 3; i++) {
+    // unwrap a QueueSink-style single-inner wrapper
+    if (candidate == null) return false;
+    if ((candidate as { _cendorOtelGovernance?: boolean })._cendorOtelGovernance === true) {
+      return true;
+    }
+    candidate = (candidate as { inner?: unknown }).inner;
+  }
+  return false;
+}
+
+/** Refcount this log's wire-mirror with core (best-effort). Returns whether it counted. */
+function signalGovernanceMirror(mirror: unknown, on: boolean): boolean {
+  if (!mirrorReachesTheWire(mirror)) return false;
+  try {
+    otel.governanceMirrored(on);
+  } catch {
+    return false; // an older @cendor/core simply has no ops spans to stand down
+  }
+  return true;
+}
+
 function resolveMirror(mirror: AuditMirror | null | false | undefined): AuditMirror | null {
   if (mirror === false) return null;
   if (mirror != null) return mirror;
@@ -486,6 +511,7 @@ export class AuditLog {
   private readonly _path: string | null;
   private readonly _storage: ChainStorage;
   private readonly _mirror: AuditMirror | null;
+  private _govMirrored = false;
   private readonly _otelApi: OTelApi | null;
   private _seq = 0;
   private _evictedFromMemory = 0;
@@ -516,6 +542,10 @@ export class AuditLog {
     this._flagOnRedact = flagOnRedact;
     this._path = path;
     this._mirror = resolveMirror(mirror);
+    // If this mirror puts governance on the OpenTelemetry wire, tell core so its Option C
+    // `governance.*` ops spans stand down — the chained `audit.*` spans are richer and must win.
+    // Refcounted, and released by `detach()`.
+    this._govMirrored = signalGovernanceMirror(this._mirror, true);
     // Cache the OTel API once so per-entry correlation stays cheap and is a no-op without OTel.
     this._otelApi = loadOtelApi();
     if (maxEntries !== null && path === null) {
@@ -845,6 +875,11 @@ export class AuditLog {
    */
   detach(): void {
     bus.unsubscribe(this._onEvent);
+    if (this._govMirrored) {
+      // release the refcount so core's ops spans resume (idempotent)
+      signalGovernanceMirror(this._mirror, false);
+      this._govMirrored = false;
+    }
     this._storage.close();
     try {
       this._mirror?.flush?.();

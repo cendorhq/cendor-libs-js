@@ -156,6 +156,11 @@ function blockCounts(span: OTelSpan, decisions: unknown): void {
  * A **no-op** when `@opentelemetry/api` isn't installed, so it is always safe to attach.
  */
 export class OTelMirror {
+  /** Marks this mirror as one that puts governance on the OpenTelemetry **wire**. Core's Option C
+   * `governance.*` spans stand down while such a mirror is attached (the mirror is richer and must
+   * win); a custom SIEM mirror that writes elsewhere deliberately does NOT suppress them. */
+  readonly _cendorOtelGovernance = true;
+
   private readonly tracer: OTelTracer | null;
   private system = '';
 
