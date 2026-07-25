@@ -536,7 +536,11 @@ export function liveSpansActive(): boolean {
 /**
  * Run `fn` with the ambient live-spans depth pinned, so a nested scope cannot leak past `fn`.
  *
- * @internal kept for the SDK's stream path, which needs a stable depth across a generator's lifetime.
+ * @internal **No caller today.** It was added in 0.14.1 for the SDK's automatic run scope, which now
+ * uses {@link _withLiveSpansDepth} instead (`@cendor/sdk` ≥ 0.23.2 also drives its stream generator
+ * inside that store, so the stream path does not need this either). Kept because it is exported —
+ * removing it would be a breaking change for no gain — but do not reach for it: prefer
+ * `_withLiveSpansDepth`, which RAISES the depth for `fn` rather than merely pinning it.
  */
 export function _isolateLiveSpans<T>(fn: () => T): T {
   if (!liveSpanStore) return fn();
