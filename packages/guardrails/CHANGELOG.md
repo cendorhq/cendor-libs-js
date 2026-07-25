@@ -1,5 +1,12 @@
 # @cendor/guardrails
 
+## 0.7.9
+
+### Patch Changes
+
+- Updated dependencies [ca57a91]
+  - @cendor/core@0.15.0
+
 ## 0.7.8
 
 ### Patch Changes
