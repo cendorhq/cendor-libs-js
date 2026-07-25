@@ -1,9 +1,16 @@
+import { bus } from '@cendor/core';
 /**
  * tokenguard emits a BudgetEvent on the bus for each pre-flight budget action (blocked/downgraded/
  * clamped). Mirrors test_budget_event.py. A blocked call never reaches the bus as an LLMCall, so the
  * BudgetEvent is the only signal the breaker fired — what acttrace chains and an OTel mirror alerts on.
  */
-import { bus } from '@cendor/core';
+import { metrics } from '@opentelemetry/api';
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  MeterProvider,
+  PeriodicExportingMetricReader,
+} from '@opentelemetry/sdk-metrics';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as tokenguard from '../src/index.js';
 import { BudgetEvent, BudgetExceeded, withBudget } from '../src/index.js';
@@ -141,18 +148,37 @@ describe('BudgetEvent', () => {
 });
 
 describe('OTelSink attribution dimensions (G9)', () => {
-  it('dimensions counters by track tags, and can suppress them', () => {
-    const captured: { amount: number; attrs: Record<string, unknown> }[] = [];
-    const fake = {
-      add: (amount: number, attrs: Record<string, unknown>) => captured.push({ amount, attrs }),
-    };
+  // W0.4: the sink now acquires its meter lazily per write, so a real in-memory MeterProvider tests
+  // the dimensioning end-to-end — no more poking private counter fields (which also closes the
+  // "OTelSink has no meter= seam" gap the external suite had filed against this test).
+  afterEach(() => metrics.disable());
 
-    const sink = new OTelSink();
-    // Inject fake counters so the dimensioning is testable without an OTel SDK installed.
-    (sink as unknown as Record<string, unknown>).tokensCounter = fake;
-    (sink as unknown as Record<string, unknown>).reasoningCounter = fake;
-    (sink as unknown as Record<string, unknown>).costCounter = fake;
-    sink.write({
+  function points(): { name: string; value: number; attrs: Record<string, unknown> }[] {
+    const out: { name: string; value: number; attrs: Record<string, unknown> }[] = [];
+    for (const rm of exporter.getMetrics()) {
+      for (const sm of rm.scopeMetrics) {
+        for (const m of sm.metrics) {
+          for (const dp of m.dataPoints) {
+            out.push({ name: m.descriptor.name, value: Number(dp.value), attrs: dp.attributes });
+          }
+        }
+      }
+    }
+    return out;
+  }
+  let exporter: InMemoryMetricExporter;
+  async function install(): Promise<MeterProvider> {
+    exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    metrics.setGlobalMeterProvider(provider);
+    return provider;
+  }
+
+  it('dimensions counters by track tags', async () => {
+    const provider = await install();
+    new OTelSink().write({
       tags: { feature: 'support', user_id: 'alice' },
       usd: '0.01',
       input_tokens: 10,
@@ -160,25 +186,24 @@ describe('OTelSink attribution dimensions (G9)', () => {
       reasoning_tokens: 0,
       model: 'gpt-4o',
     });
-    expect(captured[0]?.attrs.model).toBe('gpt-4o');
-    expect(captured[0]?.attrs.feature).toBe('support');
-    expect(captured[0]?.attrs.user_id).toBe('alice');
+    await provider.forceFlush();
+    const tokens = points().find((p) => p.name === 'gen_ai.client.token.usage');
+    expect(tokens?.value).toBe(15);
+    expect(tokens?.attrs).toEqual({ model: 'gpt-4o', feature: 'support', user_id: 'alice' });
+  });
 
-    const captured2: { amount: number; attrs: Record<string, unknown> }[] = [];
-    const fake2 = {
-      add: (amount: number, attrs: Record<string, unknown>) => captured2.push({ amount, attrs }),
-    };
-    const modelOnly = new OTelSink({ tags: false });
-    (modelOnly as unknown as Record<string, unknown>).tokensCounter = fake2;
-    (modelOnly as unknown as Record<string, unknown>).reasoningCounter = fake2;
-    (modelOnly as unknown as Record<string, unknown>).costCounter = fake2;
-    modelOnly.write({
+  it('tags:false suppresses them (model-only)', async () => {
+    const provider = await install();
+    new OTelSink({ tags: false }).write({
       tags: { feature: 'support' },
       usd: '0.01',
       input_tokens: 1,
       output_tokens: 1,
       model: 'm',
     });
-    expect(captured2[0]?.attrs).toEqual({ model: 'm' });
+    await provider.forceFlush();
+    expect(points().find((p) => p.name === 'gen_ai.client.token.usage')?.attrs).toEqual({
+      model: 'm',
+    });
   });
 });

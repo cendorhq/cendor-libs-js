@@ -272,37 +272,69 @@ export interface OTelSinkOptions {
   tags?: boolean;
 }
 
+type Counter = { add: (value: number, attrs: Record<string, unknown>) => void };
+
+/** Is this a no-op instrument/provider (the JS metrics API has no proxy — see `ensureCounters`)? */
+function isNoop(x: unknown): boolean {
+  const name = (x as { constructor?: { name?: string } })?.constructor?.name ?? '';
+  return /noop/i.test(name);
+}
+
 export class OTelSink {
-  private tokensCounter: { add: (value: number, attrs: Record<string, unknown>) => void } | null =
-    null;
-  private costCounter: { add: (value: number, attrs: Record<string, unknown>) => void } | null =
-    null;
-  private reasoningCounter: {
-    add: (value: number, attrs: Record<string, unknown>) => void;
-  } | null = null;
+  private tokensCounter: Counter | null = null;
+  private costCounter: Counter | null = null;
+  private reasoningCounter: Counter | null = null;
+  /** True once the counters came from a REAL meter provider — stop re-checking. */
+  private bound = false;
+  /** True when `@opentelemetry/api` isn't installed at all — never retry the require. */
+  private absent = false;
   private readonly emitTags: boolean;
 
   constructor(opts: OTelSinkOptions = {}) {
     this.emitTags = opts.tags ?? true;
+    // NOTE: no meter acquisition here — see `ensureCounters`.
+  }
+
+  /**
+   * Acquire the counters **lazily, per write, until a real provider answers**.
+   *
+   * The JS metrics API has no proxy provider (unlike traces, and unlike Python where both proxy):
+   * `metrics.getMeterProvider()` returns a `NoopMeterProvider` until the app calls
+   * `setGlobalMeterProvider`, and a counter obtained from it stays a `NoopCounterMetric` **forever**.
+   * Acquiring in the constructor therefore made `new OTelSink()` a permanent, silent no-op whenever it
+   * ran before the app's `NodeSDK.start()` — an undocumented ordering trap (measured: 0 datapoints,
+   * ever). Acquiring here and caching only once a non-noop meter answers makes attach order
+   * irrelevant, which is also what lets the spend tap be wired automatically.
+   */
+  private ensureCounters(): boolean {
+    if (this.bound) return true;
+    if (this.absent) return false;
     try {
       const req = createRequire(import.meta.url);
       const otel = req('@opentelemetry/api');
       const meter = otel.metrics.getMeter('cendor.tokenguard');
-      this.tokensCounter = meter.createCounter('gen_ai.client.token.usage');
+      const tokens = meter.createCounter('gen_ai.client.token.usage');
+      this.tokensCounter = tokens;
       this.costCounter = meter.createCounter('gen_ai.client.cost.usd');
       this.reasoningCounter = meter.createCounter('gen_ai.client.reasoning.token.usage');
+      // Cache only a real instrument; while it is a no-op, re-check on the next write (cheap: the
+      // require is module-cached and getMeter/createCounter on a noop provider allocate nothing).
+      this.bound = !isNoop(otel.metrics.getMeterProvider()) && !isNoop(tokens);
+      return true;
     } catch {
-      // OpenTelemetry not installed — stay in no-op mode
+      this.absent = true; // OpenTelemetry not installed — stay in no-op mode, byte-identical
+      return false;
     }
   }
 
   write(entry: SpendEntry): void {
+    if (!this.ensureCounters()) return; // OTel not installed — silently skip
     if (
       this.tokensCounter === null ||
       this.costCounter === null ||
       this.reasoningCounter === null
     ) {
-      return; // OTel not installed — silently skip
+      return;
     }
     const attrs: Record<string, unknown> = { model: entry.model ?? '' };
     if (this.emitTags) {

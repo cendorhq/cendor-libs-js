@@ -91,7 +91,9 @@ describe('track / report', () => {
     sink.close();
   });
 
-  it('OTelSink is a no-op without OpenTelemetry installed', () => {
+  it('OTelSink writes are silent when no meter provider is registered', () => {
+    // (The absent-`@opentelemetry/api` path is the same `return` — see otel-sink-lazy.test.ts for the
+    // full ordering matrix now that the sink acquires its meter lazily.)
     const sink = new OTelSink();
     expect(() =>
       sink.write({ tags: {}, usd: '0.01', input_tokens: 1, output_tokens: 1, model: 'gpt-4o' }),

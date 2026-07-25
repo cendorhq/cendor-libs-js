@@ -422,16 +422,46 @@ function internalProvider(call: LLMCall, pub: string): string {
 // spans, so a libs-only app (no SDK) lights up a trace-based monitor. Honors content capture.
 // =================================================================================================
 
-/** Nonzero while an SDK `liveSpans` context is open — the emitter defers to it (no double spans). */
-let liveSpanDepth = 0;
+// -------------------------------------------------------------------- live-spans latch (P1 fix)
+// The depth is CONTEXT-LOCAL, matching Python's ContextVar. It used to be a module global, which made
+// one open `liveSpans` scope suppress the emitter for **every** concurrent async context in the
+// process: a TS app mixing an SDK run with concurrent libs-only calls silently lost the flat spans for
+// the latter, and an UNCLOSED handle (the JS API needs an explicit `close()`) stuck the latch forever,
+// killing the emitter process-wide. AsyncLocalStorage.enterWith sets the depth for the current
+// execution context and its descendants only, so a sibling flow that never entered keeps depth 0.
+// Off-Node runtimes (no `node:async_hooks`) fall back to the historical module counter.
+interface DepthStore {
+  getStore(): number | undefined;
+  enterWith(value: number): void;
+}
 
-/** Called by the SDK when a `liveSpans` context opens, so the G20 emitter stands down. */
+const liveSpanStore: DepthStore | null = (() => {
+  try {
+    const req = createRequire(import.meta.url);
+    const { AsyncLocalStorage } = req('node:async_hooks') as {
+      AsyncLocalStorage: new () => DepthStore;
+    };
+    return new AsyncLocalStorage();
+  } catch {
+    return null; // non-Node runtime — the global counter below is the fallback
+  }
+})();
+let liveSpanDepthFallback = 0;
+
+function liveSpanDepth(): number {
+  return liveSpanStore ? (liveSpanStore.getStore() ?? 0) : liveSpanDepthFallback;
+}
+
+/** Called by the SDK when a `liveSpans` context opens, so the G20 emitter stands down (this async
+ * context and its children only). */
 export function enterLiveSpans(): void {
-  liveSpanDepth += 1;
+  if (liveSpanStore) liveSpanStore.enterWith(liveSpanDepth() + 1);
+  else liveSpanDepthFallback += 1;
 }
 /** Called by the SDK when a `liveSpans` context closes. */
 export function exitLiveSpans(): void {
-  liveSpanDepth = Math.max(0, liveSpanDepth - 1);
+  if (liveSpanStore) liveSpanStore.enterWith(Math.max(0, liveSpanDepth() - 1));
+  else liveSpanDepthFallback = Math.max(0, liveSpanDepthFallback - 1);
 }
 
 interface RichSpan {
@@ -467,7 +497,7 @@ export function useSpanEmitter(tracer?: RichTracer | null): () => void {
   const tr = tracer ?? loadRichTracer();
   if (tr === null) return () => {};
   const onEvent = (ev: unknown): void => {
-    if (liveSpanDepth > 0) return;
+    if (liveSpanDepth() > 0) return;
     if (ev instanceof LLMCall) emitLlmSpan(tr, ev);
     else if (ev instanceof ToolCall) emitToolSpan(tr, ev);
   };

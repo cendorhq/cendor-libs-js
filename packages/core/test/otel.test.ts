@@ -18,15 +18,17 @@ afterEach(() => {
 });
 
 describe('otel.span()', () => {
-  it('is a no-op that yields null (and still runs the callback) when OTel is absent', () => {
-    // Callback form: the span (or null) is passed to fn, whose return value is returned.
+  it('runs the callback and returns its value when no provider is registered', () => {
+    // `@opentelemetry/api` is a devDependency here (the auto-wiring tests need a real provider), so
+    // with no provider registered the API hands back a non-recording span rather than null. The
+    // genuinely-absent-package path — where the span IS null — is pinned in otel-absent.test.ts.
     let seen: unknown = 'unset';
     const result = otel.span('gpt-4o', { provider: 'openai', custom: 'x' }, (s) => {
       seen = s;
       return 'ok';
     });
-    expect(seen).toBeNull();
     expect(result).toBe('ok');
+    expect(seen).not.toBe('unset'); // the callback ran exactly once, with a span or null
   });
 });
 

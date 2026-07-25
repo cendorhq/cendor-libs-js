@@ -44,6 +44,15 @@ export function emit(event: unknown): void {
   if (hasError) throw firstError;
 }
 
+/**
+ * Test helper: how many subscribers are registered. Used by the local-first pins — with OTel absent,
+ * auto-wiring must subscribe **nothing** (zero added bus cost), and a manual attachment plus the auto
+ * one must never both be subscribed.
+ */
+export function _subscriberCount(): number {
+  return subscribers.length;
+}
+
 /** Test helper: clear all subscribers. */
 export function _reset(): void {
   subscribers.length = 0;
