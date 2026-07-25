@@ -1,5 +1,12 @@
 # @cendor/squeeze
 
+## 0.3.7
+
+### Patch Changes
+
+- Updated dependencies [6c87f98]
+  - @cendor/core@0.14.0
+
 ## 0.3.6
 
 ### Patch Changes

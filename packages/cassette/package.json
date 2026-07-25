@@ -1,6 +1,6 @@
 {
   "name": "@cendor/cassette",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Record real LLM calls once, then replay them in your tests forever — offline, no API key, no cost, and the same result every run.",
   "type": "module",
   "license": "Apache-2.0",

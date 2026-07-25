@@ -1,5 +1,18 @@
 # @cendor/libs
 
+## 0.2.22
+
+### Patch Changes
+
+- Updated dependencies [6c87f98]
+  - @cendor/core@0.14.0
+  - @cendor/tokenguard@0.8.0
+  - @cendor/acttrace@0.12.0
+  - @cendor/cassette@0.3.5
+  - @cendor/contextkit@2.0.7
+  - @cendor/guardrails@0.7.8
+  - @cendor/squeeze@0.3.7
+
 ## 0.2.21
 
 ### Patch Changes
