@@ -14,7 +14,15 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { LLMCall, ToolCall, Usage, addAmbientProvider, bus, currentTraceId } from '@cendor/core';
+import {
+  LLMCall,
+  ToolCall,
+  Usage,
+  addAmbientProvider,
+  bus,
+  currentTraceId,
+  otel,
+} from '@cendor/core';
 import type { AmbientEvent } from '@cendor/core';
 import {
   DETECTORS,
@@ -423,14 +431,37 @@ export interface AuditLogOptions {
   maxEntries?: number | null;
   /**
    * Optional mirror that receives every chained entry in addition to the file — an operational copy
-   * for APM/SIEM (e.g. `new OTelMirror()`). Best-effort: a failing mirror never breaks the chain, and
+   * for APM/SIEM. **Left unset it auto-attaches an `OTelMirror`** when `@opentelemetry/api` is
+   * installed and `CENDOR_TELEMETRY` isn't `off`, so a governed app's operational copy reaches the
+   * backend it already configured with no extra line; pass `mirror: false` to never mirror this log,
+   * or your own sink to use exactly that one. Best-effort: a failing mirror never breaks the chain, and
    * the file (not the mirror) stays the sole artifact `verify()` checks. If it implements `flush()`/
    * `close()`, {@link AuditLog.detach} calls them. When `@opentelemetry/api` is present, auto-captured
    * and explicit entries also carry the active span's `otel_trace_id`/`otel_span_id` for correlation.
    */
-  mirror?: AuditMirror | null;
+  mirror?: AuditMirror | null | false;
   /** Advanced: override the chain storage backend (defaults to fs when `path` is set, else memory). */
   storage?: ChainStorage;
+}
+
+/**
+ * Decide an `AuditLog`'s mirror (DR-2a).
+ *
+ * * an explicit sink ⇒ exactly that sink;
+ * * `false` ⇒ never mirror this log (the per-log opt-out);
+ * * `null`/absent (the default) ⇒ an `OTelMirror` when telemetry is on and `@opentelemetry/api` is
+ *   installed, else no mirror.
+ *
+ * The mirror is the **operational copy** the docs already promise; auto-attaching it does not change
+ * what evidence *is* — the hash-chained file (or a signed `export()`) stays the only artifact
+ * `verify()` checks, and nothing here creates an `AuditLog` the user did not create.
+ */
+function resolveMirror(mirror: AuditMirror | null | false | undefined): AuditMirror | null {
+  if (mirror === false) return null;
+  if (mirror != null) return mirror;
+  if (otel.telemetryMode() === 'off') return null;
+  if (loadOtelApi() === null) return null;
+  return new OTelMirror();
 }
 
 /**
@@ -484,7 +515,7 @@ export class AuditLog {
     this._redactor = redactor ?? defaultRedactor;
     this._flagOnRedact = flagOnRedact;
     this._path = path;
-    this._mirror = mirror ?? null;
+    this._mirror = resolveMirror(mirror);
     // Cache the OTel API once so per-entry correlation stays cheap and is a no-op without OTel.
     this._otelApi = loadOtelApi();
     if (maxEntries !== null && path === null) {

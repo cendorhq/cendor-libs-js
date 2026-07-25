@@ -281,6 +281,9 @@ function isNoop(x: unknown): boolean {
 }
 
 export class OTelSink {
+  /** Marks this class as the OTel spend emitter, so tokenguard's internal telemetry tap can stand
+   * down when the user has already wired one themselves (no double-counted spend). */
+  readonly _cendorOtelSpend = true;
   private tokensCounter: Counter | null = null;
   private costCounter: Counter | null = null;
   private reasoningCounter: Counter | null = null;

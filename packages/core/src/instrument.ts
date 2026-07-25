@@ -12,6 +12,10 @@
 import { applyAmbient } from './ambient.js';
 import { emit } from './bus.js';
 import { Dec } from './decimal.js';
+// otel.ts imports `streamText` from here, so this is a cycle by construction — safe because both
+// sides only use the other's exports at call time (function declarations, hoisted), never during
+// module evaluation. Mirrors the Python side's deferred import inside `instrument()`.
+import { _armAutoTelemetry } from './otel.js';
 import { estimate } from './prices.js';
 import { count as countTokens } from './tokens.js';
 import { currentTraceId } from './trace.js';
@@ -228,6 +232,10 @@ const MESSAGES_KWARG: Record<string, string> = { openai_responses: 'input', goog
  * ```
  */
 export function instrument<T>(client: T): T {
+  // Telemetry (DR-1): adopting a capture path arms the automatic span emitter — it stays dormant until
+  // the app's OpenTelemetry provider exists, and does nothing at all when `@opentelemetry/api` isn't
+  // installed or `CENDOR_TELEMETRY=off`. Cheap + idempotent; see otel.ts.
+  _armAutoTelemetry();
   // Overrides for targets that live on the client itself but can't be patched in place (see below).
   // When any exist we return a thin Proxy serving the wrapped fns; otherwise the client is patched in
   // place and returned unchanged (identity preserved for every normal SDK).

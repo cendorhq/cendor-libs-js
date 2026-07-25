@@ -22,22 +22,43 @@ interface OTelSpan {
   end(): void;
 }
 
+/** The `@opentelemetry/api` module, loaded **once**.
+ *
+ * `createRequire()` + `require()` costs ~90 µs, so doing it per call made the provider predicate far
+ * too expensive to run per bus event (measured). The module identity can never change within a
+ * process, and a package cannot appear mid-run, so both the hit and the miss are cached forever.
+ * `undefined` = not tried yet, `null` = not installed. */
+type OTelApi = {
+  trace: {
+    getTracer(name: string): OTelTracer & RichTracer;
+    getTracerProvider(): { getDelegate?: () => unknown };
+  };
+};
+let apiCache: OTelApi | null | undefined;
+
+function loadOTelApi(): OTelApi | null {
+  if (apiCache !== undefined) return apiCache;
+  try {
+    // Loaded synchronously (mirrors Python's `from opentelemetry import trace`); no-op if absent.
+    apiCache = createRequire(import.meta.url)('@opentelemetry/api') as OTelApi;
+  } catch {
+    apiCache = null; // OpenTelemetry not installed — stay in no-op mode
+  }
+  return apiCache;
+}
+
+/** @internal Test helper: forget the memoized `@opentelemetry/api` handle. */
+export function _resetOTelApiCache(): void {
+  apiCache = undefined;
+}
+
 /** A tracer that can run a callback with the new span installed as the active context span. */
 interface OTelTracer {
   startActiveSpan<T>(name: string, fn: (span: OTelSpan) => T): T;
 }
 
 function loadTracer(): OTelTracer | null {
-  try {
-    const req = createRequire(import.meta.url);
-    // Loaded synchronously (mirrors Python's `from opentelemetry import trace`); no-op if absent.
-    const otel = req('@opentelemetry/api') as {
-      trace: { getTracer(name: string): OTelTracer };
-    };
-    return otel.trace.getTracer('cendor.core');
-  } catch {
-    return null; // OpenTelemetry not installed — stay in no-op mode
-  }
+  return loadOTelApi()?.trace.getTracer('cendor.core') ?? null;
 }
 
 export interface SpanOptions {
@@ -127,6 +148,7 @@ function attr(bag: Record<string, unknown>, ...keys: string[]): unknown {
  * `emit: false`. Returns the call.
  */
 export function ingest(attributes: Record<string, unknown>, opts: IngestOptions = {}): LLMCall {
+  _armAutoTelemetry(); // a managed-runtime app never calls instrument() — this is its adoption point
   const { messages, emit: doEmit = true } = opts;
   const model = String(attr(attributes, 'gen_ai.request.model', 'gen_ai.response.model') ?? '');
   const provider = String(attributes['gen_ai.system'] ?? '');
@@ -458,6 +480,20 @@ export function enterLiveSpans(): void {
   if (liveSpanStore) liveSpanStore.enterWith(liveSpanDepth() + 1);
   else liveSpanDepthFallback += 1;
 }
+/**
+ * True while an SDK `liveSpans` scope is open in this async context.
+ *
+ * The SDK reads it to decide whether to open its **automatic** run scope: an explicit `liveSpans()`
+ * the user opened always wins, so a run is never wrapped twice.
+ *
+ * @example
+ * import { otel } from '@cendor/core';
+ * otel.liveSpansActive(); // false
+ */
+export function liveSpansActive(): boolean {
+  return liveSpanDepth() > 0;
+}
+
 /** Called by the SDK when a `liveSpans` context closes. */
 export function exitLiveSpans(): void {
   if (liveSpanStore) liveSpanStore.enterWith(Math.max(0, liveSpanDepth() - 1));
@@ -473,15 +509,9 @@ interface RichTracer {
 }
 
 function loadRichTracer(): RichTracer | null {
-  try {
-    const req = createRequire(import.meta.url);
-    const otel = req('@opentelemetry/api') as {
-      trace: { getTracer(name: string): RichTracer };
-    };
-    return otel.trace.getTracer('cendor.core');
-  } catch {
-    return null;
-  }
+  // The tracer itself is a ProxyTracer that upgrades when the app registers its provider (probed), so
+  // holding one is safe — unlike the metrics API, which has no proxy (see @cendor/tokenguard's sink).
+  return loadOTelApi()?.trace.getTracer('cendor.core') ?? null;
 }
 
 /**
@@ -496,13 +526,189 @@ function loadRichTracer(): RichTracer | null {
 export function useSpanEmitter(tracer?: RichTracer | null): () => void {
   const tr = tracer ?? loadRichTracer();
   if (tr === null) return () => {};
-  const onEvent = (ev: unknown): void => {
-    if (liveSpanDepth() > 0) return;
-    if (ev instanceof LLMCall) emitLlmSpan(tr, ev);
-    else if (ev instanceof ToolCall) emitToolSpan(tr, ev);
-  };
+  const onEvent = (ev: unknown): void => renderBusEvent(tr, ev);
+  manualEmitters += 1;
+  detachAutoEmitter(); // manual wins — exactly one emitter, ever
   subscribe(onEvent);
-  return () => unsubscribe(onEvent);
+  debugNote('span emitter attached (manual)');
+  return () => {
+    unsubscribe(onEvent);
+    manualEmitters = Math.max(0, manualEmitters - 1);
+  };
+}
+
+/** Render one bus event as a span (the shared body of the manual + automatic emitters). */
+function renderBusEvent(tr: RichTracer, ev: unknown): void {
+  if (liveSpanDepth() > 0) return;
+  if (ev instanceof LLMCall) emitLlmSpan(tr, ev);
+  else if (ev instanceof ToolCall) emitToolSpan(tr, ev);
+}
+
+// =================================================================================================
+// The telemetry switch (DR-1 / DR-6) — "it just flows".
+//
+// Cendor emits into the OpenTelemetry provider **your app configured**; it has no endpoint, no
+// exporter and no collector of its own. So when OTel is installed AND a real (non-default) global
+// provider exists, emitting is the useful default — the posture every OTel instrumentation library
+// takes. `CENDOR_TELEMETRY=off` turns all of it off, process-wide, with no code change.
+//
+// Nothing here is identity: the app name stays the OTel resource's `service.name`
+// (`OTEL_SERVICE_NAME`), and there is no Cendor identity env var.
+// =================================================================================================
+
+/** The one switch: `off` disables every Cendor-side emitter; unset/`auto` means "emit when a provider
+ * is configured". */
+export const TELEMETRY_ENV = 'CENDOR_TELEMETRY';
+/** Set to `1` for a one-shot stderr line describing what was detected and wired. */
+export const DEBUG_ENV = 'CENDOR_DEBUG_TELEMETRY';
+
+const debugSaid = new Set<string>();
+
+function env(name: string): string {
+  // `process` may not exist on some edge runtimes — the switch simply reads as unset there.
+  return (
+    (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[
+      name
+    ]?.trim() ?? ''
+  );
+}
+
+/**
+ * The effective telemetry mode from `CENDOR_TELEMETRY`: `'auto'` (default) or `'off'`.
+ *
+ * `auto` means *emit when the app has configured an OpenTelemetry provider* (see
+ * {@link providerConfigured}). `off` disables every Cendor-side emitter — the span emitter, the spend
+ * tap, and the audit mirror's auto-attach — without touching your code. An unrecognised value is
+ * treated as `auto` (noted once under `CENDOR_DEBUG_TELEMETRY=1`), because a typo must never silently
+ * disable telemetry.
+ *
+ * @example
+ * import { otel } from '@cendor/core';
+ * otel.telemetryMode(); // 'auto' unless CENDOR_TELEMETRY=off
+ */
+export function telemetryMode(): 'auto' | 'off' {
+  const raw = env(TELEMETRY_ENV).toLowerCase();
+  if (raw === 'off') return 'off';
+  if (raw !== '' && raw !== 'auto') {
+    debugNote(
+      `CENDOR_TELEMETRY=${JSON.stringify(raw)} is not 'auto' or 'off' — treating it as 'auto'`,
+    );
+  }
+  return 'auto';
+}
+
+function isNoopProvider(x: unknown): boolean {
+  const name = (x as { constructor?: { name?: string } })?.constructor?.name ?? '';
+  return x == null || /noop/i.test(name);
+}
+
+/**
+ * True when the app has registered a real (non-default) global OpenTelemetry tracer provider.
+ *
+ * This is the honest signal that *somebody is listening*: the API always hands back a
+ * `ProxyTracerProvider`, whose delegate is a no-op until the app's one-time OTel setup runs. It never
+ * inspects exporters or endpoints — Cendor does not care where your spans go. False when
+ * `@opentelemetry/api` is not installed.
+ *
+ * @example
+ * import { otel } from '@cendor/core';
+ * otel.providerConfigured(); // false until your app configures OTel
+ */
+export function providerConfigured(): boolean {
+  const api = loadOTelApi();
+  if (api === null) return false;
+  const provider = api.trace.getTracerProvider();
+  const delegate = typeof provider.getDelegate === 'function' ? provider.getDelegate() : provider;
+  return !isNoopProvider(delegate);
+}
+
+/** One-shot stderr note, only under `CENDOR_DEBUG_TELEMETRY=1`. Never warns by default: the silent
+ * no-op is load-bearing for local-first (an offline app must not be nagged). */
+function debugNote(message: string): void {
+  if (!['1', 'true', 'TRUE', 'yes'].includes(env(DEBUG_ENV))) return;
+  if (debugSaid.has(message)) return;
+  debugSaid.add(message);
+  const p = (globalThis as { process?: { stderr?: { write(s: string): void } } }).process;
+  p?.stderr?.write(`cendor telemetry: ${message}\n`);
+}
+
+function otelImportable(): boolean {
+  return loadOTelApi() !== null;
+}
+
+// ------------------------------------------------------------------ automatic attach (DR-1 = "auto")
+// One subscription, made the first time the app adopts a capture path (`instrument()` / `ingest()`)
+// and only when `@opentelemetry/api` is importable. It stays dormant — re-checking the cheap provider
+// predicate per event (~30 ns, measured) — until the app's provider appears, then latches and renders.
+// So attach order never matters, a provider configured after the first call is still caught, and an app
+// that never configures OTel pays a predicate check and nothing else.
+let autoEmitter: ((ev: unknown) => void) | null = null;
+let autoReady = false; // true once a real provider was seen (the latch)
+let autoTracer: RichTracer | null = null; // the ProxyTracer, held after the first render
+let manualEmitters = 0; // >0 ⇒ the user wired their own; the auto path stands down
+
+function autoOnEvent(ev: unknown): void {
+  if (manualEmitters) return;
+  if (telemetryMode() === 'off') return; // read per event: `off` applies even if exported late
+  if (!autoReady) {
+    if (!providerConfigured()) return;
+    autoReady = true;
+    debugNote('mode=auto, provider=detected, emitter=attached');
+  }
+  if (autoTracer === null) autoTracer = loadRichTracer();
+  if (autoTracer !== null) renderBusEvent(autoTracer, ev);
+}
+
+/** @internal Called from the capture entry points (`instrument()`, `ingest()`). Idempotent + cheap. */
+export function _armAutoTelemetry(): void {
+  if (autoEmitter !== null || manualEmitters) return;
+  if (telemetryMode() === 'off') return;
+  // Local-first rail: with `@opentelemetry/api` absent nothing is subscribed at all — the bus keeps
+  // exactly the subscribers it had, and behaviour is byte-identical to a pre-switch release.
+  if (!otelImportable()) return;
+  autoEmitter = autoOnEvent;
+  subscribe(autoOnEvent);
+  debugNote(providerConfigured() ? 'armed' : 'armed (mode=auto); waiting for a provider');
+}
+
+function detachAutoEmitter(): void {
+  if (autoEmitter === null) return;
+  unsubscribe(autoEmitter);
+  autoEmitter = null;
+}
+
+/** @internal Test helper: forget the automatic subscription + its latch. */
+export function _resetAutoTelemetry(): void {
+  detachAutoEmitter();
+  autoReady = false;
+  autoTracer = null;
+  manualEmitters = 0;
+  debugSaid.clear();
+}
+
+/**
+ * What the automatic path currently thinks — for diagnostics (`doctor`) and tests.
+ *
+ * @example
+ * import { otel } from '@cendor/core';
+ * otel.autoTelemetryState(); // { mode: 'auto', otel: true, provider: true, armed: true, … }
+ */
+export function autoTelemetryState(): {
+  mode: 'auto' | 'off';
+  otel: boolean;
+  provider: boolean;
+  armed: boolean;
+  emitting: boolean;
+  manual: number;
+} {
+  return {
+    mode: telemetryMode(),
+    otel: otelImportable(),
+    provider: providerConfigured(),
+    armed: autoEmitter !== null,
+    emitting: autoReady && !manualEmitters,
+    manual: manualEmitters,
+  };
 }
 
 function emitLlmSpan(tr: RichTracer, call: LLMCall): void {

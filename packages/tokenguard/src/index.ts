@@ -31,10 +31,13 @@ import {
   addInterceptor,
   addStreamObserver,
   bus,
+  otel,
   prices,
   tokens,
 } from '@cendor/core';
 import type { AmbientEvent, Decimal, Message, Sink } from '@cendor/core';
+
+const { telemetryMode } = otel;
 
 // --------------------------------------------------------------------------- constants
 
@@ -770,16 +773,16 @@ function onCall(call: unknown): void {
     records.splice(0, overflow); // evict oldest (FIFO); counted, never silently
     droppedCount += overflow;
   }
-  if (sink !== null) {
-    sink.write({
-      tags,
-      usd: usd.toString(),
-      input_tokens: inp,
-      output_tokens: out,
-      reasoning_tokens: rsn,
-      model: call.model,
-    });
-  }
+  const row = {
+    tags,
+    usd: usd.toString(),
+    input_tokens: inp,
+    output_tokens: out,
+    reasoning_tokens: rsn,
+    model: call.model,
+  };
+  if (sink !== null) sink.write(row);
+  tapWrite(row);
 
   for (const frame of frames) {
     frame.spentUsd = frame.spentUsd.plus(usd);
@@ -1129,8 +1132,14 @@ export function clamps(): ClampRow[] {
   return [...clampRows];
 }
 
-/** Attach a spend sink (e.g. `SQLiteSink`/`OTelSink`); returns the previous one. Pass `null` to
- * detach. The in-memory aggregation (`report()`) always runs regardless. */
+/**
+ * Attach a spend sink (e.g. `SQLiteSink`/`OTelSink`); returns the previous one. Pass `null` to
+ * detach. The in-memory aggregation (`report()`) always runs regardless.
+ *
+ * This slot is **yours**: it holds exactly the sink you set (replacing any previous one). Automatic
+ * OpenTelemetry spend export does **not** live here — it rides a separate internal tap, so setting or
+ * clearing your sink can never turn backend spend off. See `CENDOR_TELEMETRY`.
+ */
 export function useSink(next: Sink | null): Sink | null {
   const previous = sink;
   sink = next;
@@ -1177,7 +1186,88 @@ export function reset(): void {
   sink = null;
   maxRecords = DEFAULT_MAX_RECORDS;
   onUnpriced = DEFAULT_ON_UNPRICED;
+  _resetTap();
   ensureSubscribed();
+}
+
+// ------------------------------------------------------------------ the internal spend tap (DR-3)
+// Automatic OTel spend export writes through an *additive* tap beside the user's sink — never through
+// `useSink`, whose replace-semantics would mean a user's later `useSink(new SQLiteSink(...))` silently
+// switched backend spend off (or vice versa). The tap is one internal OTelSink, built on the first
+// priced row and only when telemetry is on; it is inert without `@opentelemetry/api`, and (since
+// @cendor/tokenguard 0.7.0) the sink acquires its meter lazily, so construction order never matters.
+// NOTE: the tap deliberately does NOT import `./sinks.js` — that module pulls in `better-sqlite3`
+// (an optional dependency) for SQLiteSink, and the package root must stay free of it. The three
+// counters below are byte-identical to OTelSink's (pinned by a test) and share its meter.
+type SpendRow = {
+  tags: Record<string, unknown>;
+  usd: string;
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens?: number;
+  model: string;
+};
+type TapCounter = { add: (value: number, attrs: Record<string, unknown>) => void };
+let tapCounters: { tokens: TapCounter; cost: TapCounter; reasoning: TapCounter } | null = null;
+let tapBound = false; // true once the counters came from a REAL meter provider
+let tapOff = false; // a hard stop after a failure (never retry-loop on every row)
+
+function isNoopMeter(x: unknown): boolean {
+  return /noop/i.test((x as { constructor?: { name?: string } })?.constructor?.name ?? '');
+}
+
+/** True when the user's own sink IS (or wraps) an `OTelSink` — then the tap stands down, so an app
+ * that follows the older docs (`useSink(new OTelSink())`) never double-counts spend. */
+function userSinkAlreadyExports(): boolean {
+  let candidate: unknown = sink;
+  for (let i = 0; i < 3; i++) {
+    // unwrap QueueSink(...) and any similar single-inner wrapper
+    if (candidate == null) return false;
+    if ((candidate as { _cendorOtelSpend?: boolean })._cendorOtelSpend === true) return true;
+    candidate = (candidate as { inner?: unknown }).inner;
+  }
+  return false;
+}
+
+function tapWrite(row: SpendRow): void {
+  if (tapOff) return;
+  if (userSinkAlreadyExports()) return;
+  try {
+    if (telemetryMode() === 'off') return;
+    if (!tapBound) {
+      // Acquire per write until a real provider answers (the JS metrics API has no proxy), exactly
+      // like OTelSink since 0.7.0 — so the tap works whatever order the app starts OTel in.
+      const api = createRequire(import.meta.url)('@opentelemetry/api');
+      const meter = api.metrics.getMeter('cendor.tokenguard');
+      const counters = {
+        tokens: meter.createCounter('gen_ai.client.token.usage') as TapCounter,
+        cost: meter.createCounter('gen_ai.client.cost.usd') as TapCounter,
+        reasoning: meter.createCounter('gen_ai.client.reasoning.token.usage') as TapCounter,
+      };
+      tapCounters = counters;
+      tapBound = !isNoopMeter(api.metrics.getMeterProvider()) && !isNoopMeter(counters.tokens);
+    }
+    const c = tapCounters;
+    if (c === null) return;
+    const attrs: Record<string, unknown> = { model: row.model ?? '' };
+    for (const [k, v] of Object.entries(row.tags ?? {})) {
+      attrs[k] =
+        typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string' ? v : String(v);
+    }
+    // reasoning is a subset of output — its own counter, not added into the total (as in OTelSink).
+    c.tokens.add(Number(row.input_tokens) + Number(row.output_tokens), attrs);
+    c.reasoning.add(Number(row.reasoning_tokens ?? 0), attrs);
+    c.cost.add(Number(row.usd), attrs);
+  } catch {
+    tapOff = true; // telemetry must never break a governed call (OTel absent lands here once)
+  }
+}
+
+/** @internal Test helper: drop the internal OTel spend tap. */
+export function _resetTap(): void {
+  tapCounters = null;
+  tapBound = false;
+  tapOff = false;
 }
 
 // Subscribe at import so even a bare instrumented call (no budget/track) is aggregated, and arm the
