@@ -1,6 +1,6 @@
 {
   "name": "@cendor/core",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "description": "Wrap your LLM client once and capture exact token counts and cost on every call — the shared foundation the other Cendor tools build on.",
   "type": "module",
   "license": "Apache-2.0",
