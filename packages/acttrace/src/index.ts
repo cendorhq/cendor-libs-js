@@ -14,6 +14,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { resolve as resolvePath } from 'node:path';
 import {
   LLMCall,
   ToolCall,
@@ -87,6 +88,16 @@ class ValueError extends Error {
     this.name = 'ValueError';
   }
 }
+
+/**
+ * Chain files with a **live** `AuditLog` writing to them in this process, keyed by resolved path.
+ *
+ * Two live logs on one path each hold their own head/seq and both auto-capture the same
+ * process-global bus event, so they interleave two chains into one file and `verify()` fails at the
+ * first divergence — silently, until someone audits. Values are held weakly (a `WeakRef`) so a log
+ * dropped without `detach()` cannot strand its path forever.
+ */
+const openChains = new Map<string, WeakRef<AuditLog>>();
 
 /**
  * Warned when `AuditLog({ maxEntries })` is set without `path`. Bounding the in-memory ring relies on
@@ -516,6 +527,7 @@ export class AuditLog {
   private _seq = 0;
   private _evictedFromMemory = 0;
   private _head = GENESIS;
+  private _chainKey: string | null = null;
 
   constructor(system: string, opts: AuditLogOptions = {}) {
     const {
@@ -557,6 +569,12 @@ export class AuditLog {
       );
     }
     this._maxEntries = maxEntries;
+    // One live writer per chain file: claim the path before touching it (see claimChainPath). A
+    // *sequential* reopen — the process-restart case — is unaffected, because the previous log
+    // released its claim on detach(). What this refuses is two logs writing one chain at once. Only a
+    // real `path` is claimed: an injected `storage` owns its own writer, and a memory store has no
+    // file to corrupt.
+    this._chainKey = path !== null && storage === undefined ? this.claimChainPath(path) : null;
     // Append-open (not truncate) so reopening an existing log preserves it and we can resume the
     // chain. `export()` still uses a truncating fsChainStorage — this append mode is the live log only.
     this._storage =
@@ -575,6 +593,41 @@ export class AuditLog {
     }
     bus.subscribe(this._onEvent);
     addAmbientProvider(acttraceAmbient); // GLR-6: capture the active decision id pre-emit (F5)
+  }
+
+  /**
+   * @internal Register this log as the one live writer of its chain file; throw if another already is.
+   *
+   * The hash chain lives in `head` + the file, per instance. Two live logs on one path both
+   * auto-capture every bus event and both append at their own `seq`/`prevHash` — identical right
+   * after a reopen — so the file ends up holding two interleaved chains and `verify()` reports
+   * `broken link at seq N: prev_hash mismatch`. Nothing warns at the time; the evidence is only
+   * discovered to be broken when someone audits it. Refusing at construction turns that into an error
+   * at the line that caused it (the same posture as the corrupt-file refusal in `_resume`).
+   *
+   * A **sequential** reopen is untouched — the supported restart case, covered by `resume.test.ts`.
+   * Cross-process writers cannot be detected from here; one writer per chain file is a documented limit.
+   */
+  private claimChainPath(path: string): string {
+    // resolve() so `logs/audit.jsonl` and `logs/sub/../audit.jsonl` are recognised as one file
+    const key = resolvePath(path);
+    const held = openChains.get(key)?.deref();
+    if (held !== undefined) {
+      throw new ValueError(
+        // biome-ignore format: one message, kept on one line so the text stays greppable
+        `an AuditLog is already writing ${path} in this process. Two live logs on one chain file interleave two hash chains into it, so verify() fails at the first divergence. Call detach() on the first log before reopening the path (a process restart does exactly that and resumes the chain), give this log its own file (one per process lifetime, dated or rotated), or reuse the existing log.`,
+      );
+    }
+    openChains.set(key, new WeakRef(this));
+    return key;
+  }
+
+  /** @internal Give up this log's live-writer claim (idempotent; a no-op for a path-less log). */
+  private releaseChainPath(): void {
+    const key = this._chainKey;
+    if (key === null) return;
+    this._chainKey = null;
+    if (openChains.get(key)?.deref() === this) openChains.delete(key);
   }
 
   /**
@@ -875,6 +928,7 @@ export class AuditLog {
    */
   detach(): void {
     bus.unsubscribe(this._onEvent);
+    this.releaseChainPath(); // the path can be reopened now (the restart case)
     if (this._govMirrored) {
       // release the refcount so core's ops spans resume (idempotent)
       signalGovernanceMirror(this._mirror, false);

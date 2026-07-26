@@ -143,6 +143,13 @@ function findTargets(client: unknown): Target[] {
   if (responses && typeof responses.create === 'function') {
     targets.push([responses, 'create', 'openai_responses']);
   }
+  // `responses.parse(...)` — the Responses structured-output entrypoint. It issues its own request
+  // rather than delegating to `create`, so without its own target a structured-output call emitted
+  // nothing at all. Same request/response shape as `create`, so it reuses the whole Responses path;
+  // typeof-gated, so an older SDK without it is simply not wrapped. (Parity with Python 1.14.1.)
+  if (responses && typeof responses.parse === 'function') {
+    targets.push([responses, 'parse', 'openai_responses']);
+  }
   // OpenAI-shaped embeddings endpoint (OpenAI + Azure-via-openai). Wrapping it closes the
   // embeddings capture gap: pre-flight interceptors (budget block/clamp, guard redaction) run, and
   // the emitted LLMCall carries metadata.embedding = true.
@@ -300,8 +307,15 @@ export function instrument<T>(client: T): T {
 
 // --------------------------------------------------------------------------- model clients
 
-function wrap(orig: (...args: unknown[]) => Promise<unknown>, provider: string, modelDefault = '') {
-  const wrapper = async (...args: unknown[]): Promise<unknown> => {
+function wrap(orig: (...args: unknown[]) => unknown, provider: string, modelDefault = '') {
+  // Deliberately NOT an `async` arrow. An async function's return value is always a *native* Promise,
+  // which strips whatever the SDK put on its own return: openai-node and anthropic-node hand back an
+  // `APIPromise` (a Promise subclass) whose `asResponse()` / `withResponse()` are the documented way
+  // to read response headers, and `instrument<T>(client: T): T` keeps the type saying so — it
+  // type-checked and threw at runtime. The body below still runs entirely in the caller's synchronous
+  // frame, exactly as an async body does up to its first `await`, so pre()/intercept() timing (and
+  // with it the ambient stamp) is unchanged. Every exit path returns a promise.
+  const wrapper = (...args: unknown[]): unknown => {
     // The JS SDKs mostly take a single options object (`create({...})`); the legacy Gemini surface
     // also accepts a positional string/array (`generateContent("hi")`). Only spread args[0] into
     // `kwargs` when it is a plain options object — otherwise keep the original positional args intact.
@@ -314,28 +328,90 @@ function wrap(orig: (...args: unknown[]) => Promise<unknown>, provider: string, 
     const { call, start } = pre(provider, kwargs, args, modelDefault);
     ensureStreamUsageOptions(provider, kwargs);
     const streaming = Boolean(kwargs.stream) || ALWAYS_STREAM.has(provider);
-    const runReal = (): Promise<unknown> => (hasOptions ? orig(kwargs, ...rest) : orig(...args));
-    const directive = intercept(call);
+    const runReal = (): unknown => (hasOptions ? orig(kwargs, ...rest) : orig(...args));
+    // A pre-flight refusal (tokenguard's budget block, acttrace's guard) threw out of an async
+    // function before, i.e. it *rejected*. Keep it a rejection now that the wrapper is sync.
+    let directive: unknown;
+    try {
+      directive = intercept(call);
+    } catch (err) {
+      return Promise.reject(err);
+    }
     if (directive instanceof Reroute) {
       applyReroute(call, kwargs, directive, provider);
-      const response = await orig(kwargs, ...rest);
-      if (streaming) return proxyStream(call, response, provider, start);
-      post(call, response, provider, start);
-      return response;
+      return observe(() => orig(kwargs, ...rest), call, provider, start, streaming);
     }
     if (directive !== MISS) {
       call.metadata.replayed = true;
-      if (streaming) return replayStream(call, directive, provider, start);
-      post(call, directive, provider, start);
-      return directive;
+      if (streaming) return Promise.resolve(replayStream(call, directive, provider, start));
+      try {
+        post(call, directive, provider, start);
+      } catch (err) {
+        return Promise.reject(err); // a post-flight subscriber block still reaches the caller
+      }
+      return Promise.resolve(directive);
     }
-    const response = await runReal();
-    if (streaming) return proxyStream(call, response, provider, start);
-    post(call, response, provider, start);
-    return response;
+    return observe(runReal, call, provider, start, streaming);
   };
   (wrapper as { [WRAPPED]?: boolean })[WRAPPED] = true;
   return wrapper;
+}
+
+/** Promise members that must stay on **our** chain, so post-flight throws reach the caller. */
+const PROMISE_CHAIN = new Set<PropertyKey>(['then', 'catch', 'finally']);
+
+/**
+ * Run the real call, capture it, and hand the caller back something that behaves like what the SDK
+ * returned.
+ *
+ * The chain is always ours — `post()` emits on the bus, and a subscriber may raise there (guardrails'
+ * output stage blocks *after* the call), which has to reject the caller's promise. So the SDK's own
+ * promise cannot simply be returned with capture on a detached side branch: the block would vanish.
+ * Instead, when the SDK returned a Promise **subclass** (openai/anthropic `APIPromise`), the caller
+ * gets a proxy whose `then/catch/finally` are ours and whose other methods — `asResponse`,
+ * `withResponse`, anything else the SDK added — are forwarded to the SDK's own object.
+ *
+ * Plain-promise SDKs (Gemini, Ollama, Hugging Face) get no proxy at all: nothing to preserve, no cost.
+ * A **streamed** call also gets the plain chain, because it must hand back a wrapped stream rather
+ * than the SDK's value — a documented limit, along with a replayed call, which has no HTTP response.
+ */
+function observe(
+  runReal: () => unknown,
+  call: LLMCall,
+  provider: string,
+  start: number,
+  streaming: boolean,
+): unknown {
+  let returned: unknown;
+  try {
+    returned = runReal();
+  } catch (err) {
+    return Promise.reject(err); // a client that throws synchronously must still reject
+  }
+  const settled = Promise.resolve(returned).then((response) => {
+    if (streaming) return proxyStream(call, response, provider, start);
+    post(call, response, provider, start); // may throw ⇒ `settled` rejects ⇒ the caller sees it
+    return response;
+  });
+  if (streaming || !isPromiseSubclass(returned)) return settled;
+  // The caller may consume only `withResponse()` and never await the proxy, which would leave our
+  // chain's rejection unobserved and noisy. Mark it handled — the proxy's `then` still surfaces it.
+  void settled.catch(() => {});
+  return new Proxy(settled, {
+    get(target, prop, _receiver) {
+      if (!PROMISE_CHAIN.has(prop)) {
+        const extra = (returned as Record<PropertyKey, unknown>)[prop];
+        if (typeof extra === 'function') return (extra as AnyFn).bind(returned);
+      }
+      const own = Reflect.get(target, prop, target);
+      return typeof own === 'function' ? (own as AnyFn).bind(target) : own;
+    },
+  });
+}
+
+/** Whether the SDK handed back a Promise **subclass** — i.e. a promise carrying its own extras. */
+function isPromiseSubclass(value: unknown): boolean {
+  return value instanceof Promise && Object.getPrototypeOf(value) !== Promise.prototype;
 }
 
 const MISSING = Symbol('missing');
