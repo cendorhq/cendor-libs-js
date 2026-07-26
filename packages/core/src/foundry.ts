@@ -35,6 +35,7 @@ import type { AmbientProvider } from './ambient.js';
 
 interface FoundryScope {
   agent?: string;
+  agent_id?: string;
   conversation_id?: string;
 }
 
@@ -48,6 +49,11 @@ const provider: AmbientProvider = () => {
   if (!s) return undefined;
   const out: Record<string, unknown> = {};
   if (s.agent) out.agent = s.agent;
+  // D3 (0.16.0): Foundry hands us a real, stable agent **id**, so it also rides the semconv identity
+  // attribute (`gen_ai.agent.id`) rather than only the name slot. `agent` keeps carrying it too — it
+  // has since this adapter shipped, and a dashboard grouping on the name dimension must not lose its
+  // rows on an upgrade. Still attribution-only: mapping identity conjures no tokens or cost.
+  if (s.agent_id ?? s.agent) out.agent_id = s.agent_id ?? s.agent;
   if (s.conversation_id) out.conversation_id = s.conversation_id;
   return Object.keys(out).length > 0 ? out : undefined;
 };
@@ -72,7 +78,14 @@ export function foundryAgentScope<T>(
   fn: () => T,
 ): T {
   addAmbientProvider(provider); // idempotent — dedups by identity
-  return active.run({ agent: agentId || undefined, conversation_id: threadId || undefined }, fn);
+  return active.run(
+    {
+      agent: agentId || undefined,
+      agent_id: agentId || undefined,
+      conversation_id: threadId || undefined,
+    },
+    fn,
+  );
 }
 
 /** The `.runs` operations group a Foundry `AgentsClient` exposes — the methods we wrap. */

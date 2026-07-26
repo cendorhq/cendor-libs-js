@@ -80,6 +80,33 @@ export function applyAmbient(event: AmbientEvent): void {
   }
 }
 
+/**
+ * What the registered providers would stamp **right now** — for a consumer with no event.
+ *
+ * `applyAmbient` covers everything that *is* an event (an `LLMCall`, a `ToolCall`). A governance
+ * record is not: an audit entry or an enforcement decision is built by `@cendor/acttrace` /
+ * `@cendor/tokenguard` / `@cendor/guardrails`, which must not import the SDK (rule 2) and so had no
+ * way to learn which agent was acting. Measured 2026-07-26: **13 of 386** SDK governance rows named
+ * their agent, so "which agent was blocked" could only be inferred from step ordering — on a
+ * governance product, the attribute most worth having.
+ *
+ * This is a **read** of the same registry, not new state: core still carries no identity of its own
+ * (the locked core-identity principle) — the app or the SDK registers a provider, core merges what it
+ * returns. Zero-provider fast path is a single length check.
+ *
+ * @example
+ * import { ambientAttrs } from '@cendor/core';
+ * ambientAttrs().agent; // the acting agent, when something registered one
+ */
+export function ambientAttrs(): Record<string, unknown> {
+  if (providers.length === 0) return {};
+  // A throwaway event stand-in, so this reuses applyAmbient's merge (registration order,
+  // never-overwrite, never-throw) instead of duplicating it.
+  const probe = { metadata: {} as Record<string, unknown> };
+  applyAmbient(probe as AmbientEvent);
+  return probe.metadata;
+}
+
 /** Test helper: drop every registered provider. */
 export function _resetAmbient(): void {
   providers.length = 0;

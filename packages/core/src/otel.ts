@@ -9,7 +9,7 @@
  * attribute bag. Neither touches the event bus except `ingest`, which emits the normalized `LLMCall`.
  */
 import { createRequire } from 'node:module';
-import { applyAmbient } from './ambient.js';
+import { ambientAttrs, applyAmbient } from './ambient.js';
 import { emit, subscribe, unsubscribe } from './bus.js';
 import { streamText } from './instrument.js';
 import { estimate } from './prices.js';
@@ -593,6 +593,116 @@ function renderBusEvent(tr: RichTracer, ev: unknown): void {
 }
 
 // =================================================================================================
+// `trace()` as a REAL span (@cendor/core 0.16.0).
+//
+// `trace('id', fn)` used to stamp an ambient id onto every emitted `LLMCall`/`ToolCall` and nothing
+// more. Every call inside therefore arrived as its **own root span**, i.e. its own trace: a scope
+// around a chat call and a tool call produced TWO traces sharing one `cendor.traceId`. In a monitor
+// that meant one logical unit of work rendered as two unrelated rows, its governance fanned out to
+// both, and per-run governance counts doubled — while the console told users to reach for `trace()`
+// for a hierarchy it could not produce.
+//
+// The scope now brackets its calls with a real span, so one scope is one trace. Boundaries, all
+// deliberate: nothing is emitted with no OpenTelemetry / no configured provider / `CENDOR_TELEMETRY=off`;
+// **no span inside an SDK run** (that run owns the trace, and a `cendor.core`-scoped span inside a
+// `cendor.sdk` trace is a door leak for any consumer routing by scope — the calls attach either way);
+// re-entrance is a no-op (one root per scope family); and `CENDOR_TRACE_SPAN=off` /
+// `trace(id, fn, { span: false })` restores the pre-0.16 shape.
+//
+// Scope mechanics: `startActiveSpan` installs the span through `context.with`, which is
+// `AsyncLocalStorage.run()`-based — **never** `enterWith`, which leaks into concurrent flows and is
+// not restored on exit on node 20/22 (measured 2026-07-25).
+// =================================================================================================
+
+/** Turn the `trace()` parent span off without touching code. Default ON — the correct behaviour. */
+export const TRACE_SPAN_ENV = 'CENDOR_TRACE_SPAN';
+
+/** One open `trace()` scope's mutable state. Bound by `run()`, so concurrent scopes never share it. */
+interface TraceScope {
+  steps: number;
+}
+interface ScopeStore {
+  getStore(): TraceScope | undefined;
+  run<T>(value: TraceScope, fn: () => T): T;
+}
+const traceScopeStore: ScopeStore | null = (() => {
+  try {
+    const req = createRequire(import.meta.url);
+    const { AsyncLocalStorage } = req('node:async_hooks') as {
+      AsyncLocalStorage: new () => ScopeStore;
+    };
+    return new AsyncLocalStorage();
+  } catch {
+    return null; // non-Node runtime — no scope span, and the ambient id path is unaffected
+  }
+})();
+
+/**
+ * Whether {@link trace} opens a real parent span (default **true**).
+ *
+ * `CENDOR_TRACE_SPAN=off` restores the pre-0.16.0 shape (an ambient id, no parent span) for an app
+ * whose backend groups by trace id today. `CENDOR_TELEMETRY=off` disables it too, like every other
+ * Cendor emitter.
+ *
+ * @example
+ * import { otel } from '@cendor/core';
+ * otel.traceSpanEnabled(); // true unless CENDOR_TRACE_SPAN=off / CENDOR_TELEMETRY=off
+ */
+export function traceSpanEnabled(): boolean {
+  const raw = env(TRACE_SPAN_ENV).toLowerCase();
+  if (['off', '0', 'false', 'no'].includes(raw)) return false;
+  if (!['', 'on', '1', 'true', 'yes', 'auto'].includes(raw)) {
+    debugNote(
+      `CENDOR_TRACE_SPAN=${JSON.stringify(raw)} is not 'on' or 'off' — treating it as 'on'`,
+    );
+  }
+  return telemetryMode() !== 'off';
+}
+
+/** The next 1-based step ordinal inside the open `trace()` scope, or null when none is open. */
+export function nextTraceStep(): number | null {
+  const scope = traceScopeStore?.getStore();
+  if (!scope) return null;
+  scope.steps += 1;
+  return scope.steps;
+}
+
+/**
+ * Run `fn` inside the parent span of a {@link trace} scope. A plain `fn()` when there is nobody to
+ * emit to, when an SDK `liveSpans` scope already owns the run's trace, or when a scope span is
+ * already open in this context.
+ *
+ * @internal Called by `trace()`; not part of the app-facing surface.
+ */
+export function _withTraceSpan<T>(traceId: string, fn: () => T, span?: boolean): T {
+  const want = span ?? traceSpanEnabled();
+  if (!want || liveSpansActive() || traceScopeStore?.getStore() || !providerConfigured())
+    return fn();
+  const tracer = loadTracer();
+  if (tracer === null || traceScopeStore === null) return fn();
+  return traceScopeStore.run({ steps: 0 }, () =>
+    tracer.startActiveSpan(`cendor.trace ${traceId}`, (parent) => {
+      // `cendor.run.id` is the id the app chose; `cendor.scope` names what this span IS, so a consumer
+      // can tell a grouped call scope from an SDK agent run without guessing.
+      parent.setAttribute('cendor.run.id', String(traceId));
+      parent.setAttribute('cendor.scope', 'trace');
+      parent.setAttribute('cendor.operation.name', 'trace');
+      const done = (): void => parent.end();
+      let out: T;
+      try {
+        out = fn();
+      } catch (err) {
+        done();
+        throw err;
+      }
+      if (out instanceof Promise) return out.finally(done) as unknown as T;
+      done();
+      return out;
+    }),
+  );
+}
+
+// =================================================================================================
 // Option C (DR-2c) — governance ENFORCEMENT as ordinary telemetry.
 //
 // A telemetry user wants to see the decisions their stack made: a budget that blocked a call, a
@@ -640,7 +750,17 @@ export function _resetGovernanceMirrors(): void {
  * Map an enforcement event to `[span name, cendor.gov.* attrs]`, or `null` if it isn't one.
  *
  * Duck-typed exactly like `@cendor/acttrace`'s chaining (core imports no tool — rule 2). Only the
- * factual fields: what acted, at which stage, with which numbers.
+ * factual fields: what acted, at which stage, with which numbers — plus **who** acted (S4).
+ *
+ * The actor comes from the event's own field when it has one (a guardrail decision does), and
+ * otherwise from core's ambient registry — which is how a budget block, an event with no agent field
+ * at all, stops being an anonymous row. Measured 2026-07-26: 13 of 386 governance rows named their
+ * agent, so "which agent was blocked" could only be inferred from step ordering.
+ *
+ * Why this does not breach the Option-C rule that a default-on span carries no input-derived text: an
+ * agent NAME is app-supplied configuration — the string passed to `new Agent({ name })` or stamped by
+ * an ambient provider. It cannot paraphrase a payload the way a guardrail `reason` can, which is why
+ * `reason` stays off these spans and a name does not.
  *
  * @internal also used by `@cendor/sdk` to render the same decision as a child of its run root.
  */
@@ -648,6 +768,11 @@ export function _govAttrs(ev: unknown): [string, Record<string, unknown>] | null
   if (ev == null || typeof ev !== 'object') return null;
   const e = ev as Record<string, unknown>;
   const has = (k: string): boolean => k in e;
+  const amb = ambientAttrs();
+  const actor = (): Record<string, unknown> => ({
+    'cendor.gov.agent': e.agent || amb.agent || null,
+    'cendor.gov.agent_id': amb.agent_id || null,
+  });
   // tokenguard BudgetEvent
   if (has('action') && has('projectedUsd') && has('capUsd')) {
     return [
@@ -663,6 +788,7 @@ export function _govAttrs(ev: unknown): [string, Record<string, unknown>] | null
         'cendor.gov.cap_usd': e.capUsd == null ? null : String(e.capUsd),
         'cendor.gov.projected_tokens': e.projectedTokens ?? null,
         'cendor.gov.cap_tokens': e.capTokens ?? null,
+        ...actor(),
       },
     ];
   }
@@ -675,8 +801,8 @@ export function _govAttrs(ev: unknown): [string, Record<string, unknown>] | null
         'cendor.gov.guardrail': String(e.guardrail ?? ''),
         'cendor.gov.stage': String(e.stage ?? ''),
         'cendor.gov.action': String(e.action ?? ''),
-        'cendor.gov.agent': e.agent || null,
         'cendor.gov.tool': e.tool || null,
+        ...actor(),
       },
     ];
   }
@@ -894,11 +1020,22 @@ function emitLlmSpan(tr: RichTracer, call: LLMCall): void {
     if (call.metadata?.usage_estimated) span.setAttribute('cendor.usage_estimated', 'true');
     if (call.metadata?.replayed) span.setAttribute('cendor.replayed', true);
     if (call.traceId) span.setAttribute('cendor.trace_id', call.traceId);
+    // 0.16.0: inside a `trace()` scope this span is a CHILD step of the scope's parent span, so it
+    // carries a 1-based ordinal exactly like an SDK run's steps do — a grouped scope reads in order
+    // instead of by timestamp luck.
+    const step = nextTraceStep();
+    if (step !== null) span.setAttribute('cendor.step', step);
     // GLR-10 (D2=YES): a libs-only app can self-identify an agent via an ambient provider (or the
     // LangChain handler stamps a node/chain name — GLR-11a). Surface it on the standard semconv
     // attribute so a trace-based monitor shows it; core invents nothing — only what was stamped.
     const agent = call.metadata?.agent;
     if (typeof agent === 'string' && agent) span.setAttribute('gen_ai.agent.name', agent);
+    // W4/§6.1: the semconv sibling — an agent's stable IDENTITY, not its label. A name collides
+    // across apps and a rename loses history; an id does neither. Emitted ONLY when something stamped
+    // one (a framework adapter that owns a real id, or `new Agent({ id })` in the SDK). Absent, the
+    // attribute is omitted — never hashed, never placeholdered: no invented identity.
+    const agentId = call.metadata?.agent_id;
+    if (typeof agentId === 'string' && agentId) span.setAttribute('gen_ai.agent.id', agentId);
     const attrs = contentAttrs({
       inputMessages: call.messages,
       outputMessages: responseMessages(call),
@@ -917,6 +1054,8 @@ function emitToolSpan(tr: RichTracer, tc: ToolCall): void {
     span.setAttribute('gen_ai.tool.name', tc.name);
     if (tc.latencyMs != null) span.setAttribute('cendor.latency_ms', tc.latencyMs);
     if (tc.traceId) span.setAttribute('cendor.trace_id', tc.traceId);
+    const toolStep = nextTraceStep();
+    if (toolStep !== null) span.setAttribute('cendor.step', toolStep);
     const attrs = toolContentAttrs(tc.arguments, tc.result);
     for (const [k, v] of Object.entries(attrs)) span.setAttribute(k, v);
   } finally {

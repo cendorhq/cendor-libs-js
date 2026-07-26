@@ -14,6 +14,7 @@
  * every current release and matches the rest of the stack (`@cendor/core` spans, the SDK span tree).
  */
 import { createRequire } from 'node:module';
+import { ambientAttrs } from '@cendor/core';
 import { PyFloat } from './pyjson.js';
 
 /** Minimal shape of the OTel bits we touch (typed defensively — OpenTelemetry is optional). */
@@ -56,6 +57,18 @@ interface MirrorableEntry {
 }
 
 /** Structured, non-sensitive payload keys worth surfacing as queryable/alertable span attributes. */
+/** What core's ambient providers would stamp now (the acting agent, when an SDK/app set one).
+ *
+ * Read through `@cendor/core` so acttrace never imports a sibling tool (rule 2), and tolerant of an
+ * older core with no such read — the mirror must keep working against any core on the shelf. */
+function ambient(): Record<string, unknown> {
+  try {
+    return ambientAttrs();
+  } catch {
+    return {}; // never let telemetry break an audit write
+  }
+}
+
 const ATTR_KEYS = [
   'decision_id',
   'action',
@@ -193,6 +206,18 @@ export class OTelMirror {
       if (entry.hash) span.setAttribute('cendor.audit.hash', String(entry.hash));
       const system = this.system || (typeof payload.system === 'string' ? payload.system : '');
       if (system) span.setAttribute('cendor.audit.system', system);
+      // S4 — name the ACTOR on every mirrored entry, not just a guardrail decision. Measured
+      // 2026-07-26: 13 of 386 SDK governance rows carried an agent, so "which agent was blocked" had
+      // to be inferred from step ordering. The entry's own payload wins (set below in the typed
+      // handling); this fills the gap for the types with no agent field at all — a budget block, a
+      // decision record, an llm_call.
+      //
+      // The value comes from core's ambient registry, so acttrace learns nothing about the SDK
+      // (rule 2): the SDK registers a provider, core merges it, this reads it. An agent name is
+      // app-supplied configuration, never input-derived text.
+      const amb = ambient();
+      if (!payload.agent) setScalar(span, 'cendor.audit.agent', amb.agent);
+      if (!payload.agent_id) setScalar(span, 'cendor.audit.agent_id', amb.agent_id);
       const etype = String(entry.type ?? '');
       for (const key of ATTR_KEYS) {
         // A budget's `name` is exposed as `cendor.audit.budget` (below), not the generic

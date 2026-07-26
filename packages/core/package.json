@@ -22,6 +22,10 @@
     "./foundry": {
       "types": "./dist/foundry.d.ts",
       "default": "./dist/foundry.js"
+    },
+    "./agent-ids": {
+      "types": "./dist/agent-ids.d.ts",
+      "default": "./dist/agent-ids.js"
     }
   },
   "files": [
@@ -85,6 +89,7 @@
     "@langchain/core": "^1.2.3",
     "@openai/agents": "^0.13.0",
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/context-async-hooks": "^2.1.0",
     "@opentelemetry/sdk-trace-base": "^2.1.0"
   }
 }
