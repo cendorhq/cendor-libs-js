@@ -35,5 +35,12 @@
     "typescript": "^5.7.3",
     "vitest": "^4.1.10"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "pnpm": {
+    "//": "Security floors for transitive dev dependencies (GHSA-mh99-v99m-4gvg brace-expansion DoS, GHSA-r28c-9q8g-f849 postcss path traversal). Both arrive dev-only via rimraf>glob>minimatch and vitest>vite, so neither ships to consumers - but a floor here means a lockfile re-resolve can never reintroduce them. These are >= floors, not pins: remove them once every dependent's own range has moved past these versions.",
+    "overrides": {
+      "brace-expansion": ">=5.0.8",
+      "postcss": ">=8.5.18"
+    }
+  }
 }
