@@ -394,13 +394,27 @@ function observe(
     post(call, response, provider, start); // may throw ⇒ `settled` rejects ⇒ the caller sees it
     return response;
   });
-  if (streaming || !isPromiseSubclass(returned)) return settled;
+  if (!isPromiseSubclass(returned)) return settled;
   memoizeParseResponse(returned);
   // The caller may consume only `withResponse()` and never await the proxy, which would leave our
   // chain's rejection unobserved and noisy. Mark it handled — the proxy's `then` still surfaces it.
   void settled.catch(() => {});
   return new Proxy(settled, {
     get(target, prop, _receiver) {
+      // A **streamed** call must still hand back cendor's counting stream, so `withResponse()`
+      // cannot simply be forwarded — the SDK's own `data` is the raw stream, and iterating that
+      // counts nothing. Take the SDK's `response`/`request_id` and swap in our wrapper.
+      // anthropic-node's `messages.stream()` helper is built on exactly this call
+      // (`lib/MessageStream.mjs`: `create({...,stream:true}).withResponse()`), so without it an
+      // instrumented Anthropic client made the SDK's own streaming helper throw.
+      if (streaming && prop === 'withResponse') {
+        return async (): Promise<unknown> => {
+          const sdk = (await (returned as { withResponse(): Promise<unknown> }).withResponse()) as
+            | Record<string, unknown>
+            | undefined;
+          return { ...sdk, data: await settled };
+        };
+      }
       if (!PROMISE_CHAIN.has(prop)) {
         const extra = (returned as Record<PropertyKey, unknown>)[prop];
         if (typeof extra === 'function') return (extra as AnyFn).bind(returned);

@@ -24,3 +24,15 @@ Measured against the real openai 6.49.0 SDK on the published shelf.
 The test that missed this used a fake whose `parse` returned its own promise instead of delegating to
 `create`; the new fixture models the real architecture — one-shot body, memoizing `parse()`,
 re-parsing `_thenUnwrap` — so the defect is expressible offline.
+
+A third helper, found by surveying the rest of the family rather than stopping at `parse`:
+**`anthropic.messages.stream()` threw under `instrument()`.** It is built on
+`messages.create({...,stream:true}).withResponse()` (`lib/MessageStream.mjs`), and a streamed call
+returned cendor's plain chain, which has no `withResponse` — so an instrumented Anthropic client
+broke the SDK's own streaming helper with
+`AnthropicError: messages.create(...).withResponse is not a function`. Measured on the published
+0.16.1 against the real `@anthropic-ai/sdk` 0.112.5. A streamed call now keeps the accessors too, and
+`withResponse()` hands back the SDK's `response` with **cendor's counting stream** as `data` —
+forwarding the SDK's raw stream would have unbroken the helper while silently counting nothing.
+`openai`'s `chat.completions.stream` was measured in the same sweep and already worked (it delegates
+to `create`).

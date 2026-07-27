@@ -216,3 +216,121 @@ it('a client whose parse does NOT delegate is still captured once (no double tar
   // and a non-delegating one simply goes uncaptured rather than being counted twice.
   expect(events.length).toBeLessThanOrEqual(1);
 });
+
+// --- N-5: anthropic's `messages.stream()` helper ----------------------------------------------
+//
+// `MessageStream.createMessage` (anthropic-node `lib/MessageStream.mjs:145`) does
+//     const { response, data: stream } = await messages.create({...params, stream: true}, ...).withResponse();
+//     for await (const event of stream) { ... }
+// A streamed call returned cendor's plain chain, which has no `withResponse`, so instrumenting an
+// Anthropic client made the SDK's own streaming helper **throw**:
+//     AnthropicError: messages.create(...).withResponse is not a function
+// Measured against the real @anthropic-ai/sdk 0.112.5 on the published @cendor/core 0.16.1.
+
+class FakeStreamPromise<T> extends Promise<T> {
+  responsePromise: Promise<Props>;
+  parseResponse: (props: Props) => unknown;
+  private parsedPromise?: Promise<T>;
+
+  constructor(
+    responsePromise: Promise<Props>,
+    parseResponse: (props: Props) => unknown = (p) => p.response.json(),
+  ) {
+    super((resolve) => resolve(null as unknown as T));
+    this.responsePromise = responsePromise;
+    this.parseResponse = parseResponse;
+  }
+
+  parse(): Promise<T> {
+    if (!this.parsedPromise) {
+      this.parsedPromise = this.responsePromise.then((p) => this.parseResponse(p)) as Promise<T>;
+    }
+    return this.parsedPromise;
+  }
+
+  // openai's APIPromise overrides then/catch/finally to route through a memoized parse().
+  // biome-ignore lint/suspicious/noThenProperty: deliberately modelling the SDK's APIPromise
+  override then<TResult1 = T, TResult2 = never>(
+    onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+  ): Promise<TResult1 | TResult2> {
+    return this.parse().then(onfulfilled, onrejected);
+  }
+
+  asResponse(): Promise<{ json(): unknown }> {
+    return this.responsePromise.then((p) => p.response);
+  }
+
+  async withResponse(): Promise<{ data: T; response: { json(): unknown } }> {
+    const [data, response] = await Promise.all([this.parse(), this.asResponse()]);
+    return { data, response };
+  }
+}
+
+const EVENTS = [
+  { type: 'message_start', message: { usage: { input_tokens: 8, output_tokens: 0 } } },
+  { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } },
+  { type: 'message_delta', usage: { output_tokens: 3 } },
+];
+
+/** An Anthropic-shaped client whose `messages.stream` is the SDK helper built on `create`. */
+function anthropicClient() {
+  const client = {
+    messages: {
+      create(_args: Record<string, unknown>): FakeStreamPromise<unknown> {
+        const stream = {
+          controller: { signal: { aborted: false } },
+          async *[Symbol.asyncIterator]() {
+            for (const e of EVENTS) yield e;
+          },
+        };
+        return new FakeStreamPromise(Promise.resolve({ response: { json: () => stream } }));
+      },
+      async stream(args: Record<string, unknown>): Promise<string> {
+        const { data, response } = await (
+          client.messages.create({ ...args, stream: true }) as FakeStreamPromise<{
+            controller: { signal: { aborted: boolean } };
+            [Symbol.asyncIterator](): AsyncIterator<unknown>;
+          }>
+        ).withResponse();
+        if (response === undefined) throw new Error('no response');
+        let text = '';
+        for await (const ev of data as AsyncIterable<Record<string, unknown>>) {
+          const delta = ev.delta as { text?: string } | undefined;
+          text += delta?.text ?? '';
+        }
+        // the helper also reads `stream.controller` — the wrapped stream must forward it
+        if (data.controller.signal.aborted) throw new Error('aborted');
+        return text;
+      },
+    },
+  };
+  return client;
+}
+
+it('UNinstrumented, the messages.stream() helper works (the fixture is honest)', async () => {
+  expect(await anthropicClient().messages.stream({ model: 'claude-haiku-4-5' })).toBe('hi');
+  expect(events).toHaveLength(0);
+});
+
+it("anthropic's messages.stream() helper survives instrument() and is captured", async () => {
+  const c = instrument(anthropicClient());
+  expect(await c.messages.stream({ model: 'claude-haiku-4-5' })).toBe('hi');
+
+  expect(events).toHaveLength(1); // was: AnthropicError, withResponse is not a function
+  const call = events[0] as LLMCall;
+  expect(call.provider).toBe('anthropic');
+  expect(call.usage).toStrictEqual(new Usage({ inputTokens: 8, outputTokens: 3 }));
+});
+
+it('a streamed call still hands back cendor’s counting stream, not the SDK’s raw one', async () => {
+  const c = instrument(anthropicClient());
+  const returned = c.messages.create({ model: 'claude-haiku-4-5', stream: true });
+  const { data } = await (
+    returned as unknown as { withResponse(): Promise<{ data: AsyncIterable<unknown> }> }
+  ).withResponse();
+  let n = 0;
+  for await (const _ of data) n++;
+  expect(n).toBe(EVENTS.length);
+  expect(events).toHaveLength(1); // counted, because `data` is our wrapper
+});
