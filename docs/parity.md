@@ -9,6 +9,18 @@ audit chain).
 
 Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** deliberately not ported.
 
+> **Reading the version floors after `@cendor/*` 1.0.** The `≥ 0.x` floors in the Notes column are
+> **historical and still correct** — they say which release first shipped a capability, and `≥ 0.16.2`
+> is satisfied by `1.0.0`. They have deliberately not been rewritten: a feature that landed in 0.16.2
+> landed in 0.16.2, and renumbering it would be falsifying the record.
+>
+> npm went to **1.0** on 2026-07-27 as a *stability declaration* — no API moved and there is no
+> migration. It exists because a pre-1.0 caret never crosses a minor, so one sibling left behind
+> resolved a second `@cendor/core` (a second event bus) and cross-library cooperation stopped
+> silently. At 1.x a caret spans the whole major, matching Python's `>=1,<2`. `@cendor/contextkit`
+> continues from `2.x` to `3.0.0` rather than counting backwards. Policy:
+> [versioning and support](https://cendor.ai/docs/languages#versioning-and-support).
+
 ## Libraries (`cendor-libs` ↔ `cendor-libs-js`)
 
 | Capability | Python | TypeScript | Notes |
