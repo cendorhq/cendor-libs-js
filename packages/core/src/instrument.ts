@@ -143,13 +143,14 @@ function findTargets(client: unknown): Target[] {
   if (responses && typeof responses.create === 'function') {
     targets.push([responses, 'create', 'openai_responses']);
   }
-  // `responses.parse(...)` — the Responses structured-output entrypoint. It issues its own request
-  // rather than delegating to `create`, so without its own target a structured-output call emitted
-  // nothing at all. Same request/response shape as `create`, so it reuses the whole Responses path;
-  // typeof-gated, so an older SDK without it is simply not wrapped. (Parity with Python 1.14.1.)
-  if (responses && typeof responses.parse === 'function') {
-    targets.push([responses, 'parse', 'openai_responses']);
-  }
+  // `responses.parse` / `chat.completions.parse` are deliberately NOT targets here, and that is
+  // parity of *behaviour* with Python rather than of mechanism. In **openai-node** they are helper
+  // methods built on `create` (`resources/responses/responses.js`,
+  // `resources/chat/completions/completions.js` — both `this._client…create(...)._thenUnwrap(...)`),
+  // so the wrapped `create` already captures them, exactly once; adding a second target would
+  // double-count the same request. In **Python** the same names POST their own request and
+  // therefore do need their own targets (`cendor-core` 1.14.1 / 1.14.2). What these helpers *do*
+  // need is for the SDK's own parse step to survive instrumentation — see `memoizeParseResponse`.
   // OpenAI-shaped embeddings endpoint (OpenAI + Azure-via-openai). Wrapping it closes the
   // embeddings capture gap: pre-flight interceptors (budget block/clamp, guard redaction) run, and
   // the emitted LLMCall carries metadata.embedding = true.
@@ -394,6 +395,7 @@ function observe(
     return response;
   });
   if (streaming || !isPromiseSubclass(returned)) return settled;
+  memoizeParseResponse(returned);
   // The caller may consume only `withResponse()` and never await the proxy, which would leave our
   // chain's rejection unobserved and noisy. Mark it handled — the proxy's `then` still surfaces it.
   void settled.catch(() => {});
@@ -412,6 +414,39 @@ function observe(
 /** Whether the SDK handed back a Promise **subclass** — i.e. a promise carrying its own extras. */
 function isPromiseSubclass(value: unknown): boolean {
   return value instanceof Promise && Object.getPrototypeOf(value) !== Promise.prototype;
+}
+
+/** Parse steps we have already memoized, so wrapping twice cannot nest. */
+const MEMOIZED = new WeakSet<object>();
+
+/**
+ * Let the SDK's own helper methods survive instrumentation.
+ *
+ * openai-node builds `responses.parse`, `chat.completions.parse` and `runTools` on
+ * `APIPromise._thenUnwrap`, which derives a **new** promise sharing the same fetch `Response` and
+ * calls the *original's* `parseResponse` a second time. A fetch body can only be read once — and
+ * cendor's capture chain parses too — so the caller got
+ * `TypeError: Body is unusable: Body has already been read` and no event at all. (Before the
+ * accessors were preserved it failed earlier still, with `_thenUnwrap is not a function`.)
+ *
+ * Memoizing that one step makes every consumer — ours and any derived promise — share a single
+ * read. Duck-typed, no SDK import, and inert on a promise that has no `parseResponse`.
+ */
+function memoizeParseResponse(promise: unknown): void {
+  const target = promise as { parseResponse?: (...args: unknown[]) => unknown };
+  const original = target.parseResponse;
+  if (typeof original !== 'function' || MEMOIZED.has(original)) return;
+  let cached: { value: unknown } | undefined;
+  const memo = (...args: unknown[]): unknown => {
+    if (cached === undefined) cached = { value: original.apply(promise, args) };
+    return cached.value;
+  };
+  MEMOIZED.add(memo);
+  try {
+    target.parseResponse = memo;
+  } catch {
+    // a frozen/immutable promise object — leave the SDK exactly as it was
+  }
 }
 
 const MISSING = Symbol('missing');

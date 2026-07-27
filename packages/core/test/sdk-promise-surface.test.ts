@@ -237,9 +237,14 @@ it('a streamed call still yields a wrapped stream (its SDK surface is a document
   );
 });
 
-it('responses.parse is instrumented, exactly once (parity with Python 1.14.1)', async () => {
-  // The structured-output entrypoint issues its own request rather than delegating to create(), so
-  // without its own target a structured-output call emitted no event at all.
+it('responses.parse is NOT a second target — it is a helper built on create()', async () => {
+  // Corrected 2026-07-27 by measuring the real SDK. This test used to assert that `parse` was its
+  // own instrument() target, "for parity with Python 1.14.1" — but the fake below (a `parse` that
+  // returns its own promise) cannot express what openai-node actually does. There, `parse` is
+  //   `this._client.responses.create(...)._thenUnwrap(...)`
+  // so a second target counts one request twice, and the real failure was worse than a miscount:
+  // `TypeError: Body is unusable`. The delegating case — the one that matters — is covered in
+  // `sdk-helper-methods.test.ts`; here we only pin that one call is never two.
   const c = instrument({
     responses: {
       create: () => apiPromise({ usage: { input_tokens: 1, output_tokens: 1 } }),
@@ -248,12 +253,11 @@ it('responses.parse is instrumented, exactly once (parity with Python 1.14.1)', 
   });
   await c.responses.parse({ model: 'gpt-4o-mini', input: 'say ok' });
 
-  expect(events).toHaveLength(1);
-  const call = events[0] as LLMCall;
+  expect(events.length).toBeLessThanOrEqual(1);
+  await c.responses.create({ model: 'gpt-4o-mini', input: 'say ok' });
+  const call = events.at(-1) as LLMCall;
   expect(call.provider).toBe('openai');
-  expect(call.model).toBe('gpt-4o-mini');
-  expect(call.usage).toStrictEqual(new Usage({ inputTokens: 14, outputTokens: 2 }));
-  expect(call.messages).toStrictEqual([{ role: 'user', content: 'say ok' }]);
+  expect(call.usage).toStrictEqual(new Usage({ inputTokens: 1, outputTokens: 1 }));
 });
 
 it('a client without responses.parse is untouched', async () => {
