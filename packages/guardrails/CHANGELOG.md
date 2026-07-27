@@ -1,5 +1,45 @@
 # @cendor/guardrails
 
+## 1.0.0
+
+### Major Changes
+
+- **1.0 — a stability declaration, not a breaking change.**
+
+  No API moved. Nothing was removed, renamed, or given a different shape. If your code compiles against
+  `0.16.x` it compiles against `1.0.0`. **There is no migration.**
+
+  **Why now.** Pre-1.0, a caret never crosses a minor: `^0.15.0` will not accept `0.16.0`. Because every
+  `@cendor/*` library declares a caret on `@cendor/core`, one sibling left a minor behind resolved a
+  **second copy of `@cendor/core`** — which is a second event bus. Cross-library cooperation then stops
+  **silently**: a guardrail decision emitted on one bus never reaches an SDK listening on the other, and
+  nothing fails to say so. That was measured in the wild three times (2026-07-25 `@cendor/guardrails
+0.7.6` against an SDK on `0.15.0`; twice in `cendor-testsuits`).
+
+  At `1.x` a caret spans the whole major — the same shape Python has had all along with
+  `cendor-core>=1,<2` — and the entire class of failure disappears.
+
+  **What to expect.**
+
+  - Upgrading is `npm i @cendor/libs@latest` (or the individual packages). Nothing else.
+  - A `^0.x` range will **not** pick this up on its own — a caret does not cross a major. That is
+    deliberate: you move when you choose to.
+  - Version numbers are **independent across languages**. `cendor-core 1.14` (PyPI) and
+    `@cendor/core 1.0` (npm) are the same capability; the
+    [parity matrix](https://cendor.ai/docs/languages) is the contract, not matching numbers.
+  - `@cendor/contextkit` continues from `2.x` to `3.0.0` rather than counting backwards — it took an
+    accidental major earlier when a peer range widened. Same release, same meaning.
+
+  Alongside this, the versioning contract is now written down at
+  https://cendor.ai/docs/languages#versioning-and-support — SemVer per package, deprecations warning
+  in-band for at least two minors before removal, security fixes on the previous major for 6 months,
+  and majors announced 30 days ahead.
+
+### Patch Changes
+
+- Updated dependencies
+  - @cendor/core@1.0.0
+
 ## 0.7.10
 
 ### Patch Changes
