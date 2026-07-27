@@ -34,5 +34,9 @@ jobs:
         run: pnpm check:types
       - name: Lint
         run: pnpm lint
+      # A MAJOR is irreversible on npm and re-frames the product for every reader. It is never an
+      # autonomous decision: a major changeset must carry an in-band `Approved-Major:` line.
+      - name: a major bump needs explicit approval
+        run: pnpm check:major
       - name: Test (no network — committed conformance vectors)
         run: pnpm test

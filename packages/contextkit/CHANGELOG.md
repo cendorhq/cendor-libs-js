@@ -1,5 +1,13 @@
 # @cendor/contextkit
 
+## 3.0.1
+
+### Patch Changes
+
+- Re-pinned to `@cendor/core@^3.0.0` so the whole family resolves one core. `@cendor/contextkit`
+  was already on major 3 and stays there — see the shared-major note in the sibling packages and
+  https://cendor.ai/docs/languages#versioning-and-support.
+
 ## 3.0.0
 
 ### Major Changes

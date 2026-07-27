@@ -21,7 +21,8 @@
     "fixtures": "cd ../cendor-libs && uv run python ../cendor-libs-js/scripts/gen-fixtures.py && uv run python ../cendor-libs-js/scripts/gen-fixtures-io.py",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "pnpm build && changeset publish"
+    "release": "pnpm build && changeset publish",
+    "check:major": "node scripts/check-major-bump.mjs ."
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",

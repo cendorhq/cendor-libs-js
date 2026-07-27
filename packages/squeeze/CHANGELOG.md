@@ -1,5 +1,29 @@
 # @cendor/squeeze
 
+## 3.0.0
+
+### Major Changes
+
+- **The Cendor libraries now share one major version.** Every `@cendor/*` library moves its major
+  together from here: anything on major 3 works with anything else on major 3. Minors and patches
+  stay independent per package, so `@cendor/core 3.4.1` beside `@cendor/squeeze 3.0.2` is normal
+  and correct.
+
+  **No API changed in this release.** Nothing was removed, renamed, or reshaped — code that compiles
+  today compiles after upgrading, and there is no migration. Upgrade the set together:
+  `npm i @cendor/libs@latest`.
+
+  These libraries cooperate through a single in-process event bus in `@cendor/core`. If two of them
+  resolve *different* copies of core, that is two buses and cooperation stops silently — a guardrail
+  decision never reaches the code listening for it, with nothing failing to say so. A shared major
+  makes an incoherent set obvious at a glance rather than at runtime, and a caret spanning the whole
+  major keeps the resolver on one copy.
+
+  Policy: https://cendor.ai/docs/languages#versioning-and-support — a new capability is a **minor**,
+  deprecations warn in-band for at least two minors before removal, security fixes land on the
+  previous major for six months, and majors are announced 30 days ahead. Versions stay **independent
+  across languages**; the parity matrix, not matching numbers, is the contract.
+
 ## 1.0.0
 
 ### Major Changes
