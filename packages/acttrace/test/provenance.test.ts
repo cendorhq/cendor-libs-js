@@ -56,7 +56,9 @@ describe('chain provenance', () => {
     const path = join(dir, 'chain.jsonl');
     new AuditLog('s', { path }).detach();
 
-    const lines = readFileSync(path, 'utf8').split('\n').filter((l) => l.trim().length > 0);
+    const lines = readFileSync(path, 'utf8')
+      .split('\n')
+      .filter((l) => l.trim().length > 0);
     const i = lines.findIndex((l) => !('_meta' in JSON.parse(l)));
     const row = JSON.parse(lines[i] as string);
     row.payload.producer = '@cendor/acttrace/99.99.99'; // a lie about what wrote this file
@@ -75,9 +77,12 @@ describe('chain provenance', () => {
     const first = new AuditLog('s', { path });
     first.detach();
 
+    // Rebuild the opener's payload WITHOUT the two fields — destructuring rather than `delete`,
+    // which biome rejects on perf grounds.
     const rows = entries(path);
-    delete rows[0]?.payload.format;
-    delete rows[0]?.payload.producer;
+    const opener = rows[0] as Record<string, any>;
+    const { format: _f, producer: _p, ...withoutProvenance } = opener.payload;
+    opener.payload = withoutProvenance;
     // Re-link entry 0 exactly as an old writer produced it, using the library's OWN exported
     // chainHash — hand-rolling the digest here would only test the test's arithmetic.
     let prev = '0'.repeat(64);
