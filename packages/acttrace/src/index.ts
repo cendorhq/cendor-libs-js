@@ -14,6 +14,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createRequire } from 'node:module';
 import { resolve as resolvePath } from 'node:path';
 import {
   LLMCall,
@@ -80,6 +81,40 @@ export type { GuardOptions, OnBlock, ResolvedFindings } from './guard.js';
 
 /** The `prev_hash` of the first entry: 64 ASCII zeros. */
 export const GENESIS = '0'.repeat(64);
+
+/**
+ * The wire format this implementation writes, stamped into every new chain's `audit_open` payload so
+ * a file can name the spec it follows. **Identical in the Python port** — the format is one contract
+ * whatever the language, so this string is the part of provenance that must NOT differ.
+ * See `cendor-libs/docs/specs/acttrace-chain.md`.
+ */
+export const CHAIN_FORMAT = 'acttrace-chain/1';
+
+/** The package whose version identifies the writer, kept beside the format so they cannot drift. */
+const DIST = '@cendor/acttrace';
+
+/**
+ * `"@cendor/acttrace/<version>"`, or `null` when the version cannot be read.
+ *
+ * Returns null rather than guessing: this string goes inside signed, hash-chained evidence, and a
+ * version we are not certain of is worse than no version — so an unknown producer is OMITTED,
+ * following the format's existing rule for optional payload fields.
+ *
+ * Deliberately **differs from Python's** (`cendor-acttrace/<version>`): they are separate packages on
+ * independent version lines, and pretending otherwise would be the lie. Cross-language verification
+ * is unaffected — each side verifies the bytes actually in the file.
+ */
+function producer(): string | null {
+  try {
+    const require = createRequire(import.meta.url);
+    // `../package.json` from dist/index.js — the published layout. A bundler or edge runtime that
+    // cannot resolve it simply yields null, and the field is omitted.
+    const pkg = require('../package.json') as { version?: string };
+    return pkg?.version ? `${DIST}/${pkg.version}` : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Named error mirroring Python's `ValueError` (message substring is the contract). */
 class ValueError extends Error {
@@ -589,7 +624,16 @@ export class AuditLog {
     if (existing.length > 0) {
       this._resume(existing);
     } else {
-      this._append('audit_open', { system, risk_tier: riskTier });
+      // Provenance rides INSIDE the payload, so it is hashed into the chain and cannot be edited
+      // after the fact. Payload data only — the hashed body is still exactly {seq, ts, type, payload},
+      // which is why chains written before this release keep verifying and a mixed old/new file
+      // verifies end to end. `producer` is omitted when the version cannot be read (never invented).
+      // Only a NEW chain gets this: a resume writes no second audit_open, so a file names the
+      // version that OPENED it.
+      const opened: Record<string, unknown> = { system, risk_tier: riskTier, format: CHAIN_FORMAT };
+      const who = producer();
+      if (who) opened.producer = who;
+      this._append('audit_open', opened);
     }
     bus.subscribe(this._onEvent);
     addAmbientProvider(acttraceAmbient); // GLR-6: capture the active decision id pre-emit (F5)

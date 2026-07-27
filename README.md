@@ -11,6 +11,13 @@ Composable TypeScript primitives for context, cost, testing, and governance — 
 
 [![npm: @cendor/libs](https://img.shields.io/npm/v/@cendor/libs.svg?label=%40cendor%2Flibs)](https://www.npmjs.com/package/@cendor/libs) ![Node](https://img.shields.io/badge/node-%E2%89%A518-blue) ![License](https://img.shields.io/badge/license-Apache_2.0-blue) ![module: ESM](https://img.shields.io/badge/module-ESM-blue) ![types: TypeScript](https://img.shields.io/badge/types-TypeScript-blue) [![Biome](https://img.shields.io/badge/lint-biome-60a5fa)](https://biomejs.dev)
 
+<!-- cendor:downloads:start — self-hosted badges from cendor.ai (no third party in the render path).
+     The numbers live inside the SVGs, regenerated daily from the committed ledger, so this file
+     never goes stale. PyPI excludes index mirrors; npm publishes no mirror filter, which is why the
+     two are shown separately and never summed. Method: https://cendor.ai/downloads -->
+[![npm · @cendor/*](https://cendor.ai/badge/downloads/cendor-libs-js.svg)](https://cendor.ai/downloads) [![all Cendor · npm](https://cendor.ai/badge/downloads/npm.svg)](https://cendor.ai/downloads) [![all Cendor · PyPI](https://cendor.ai/badge/downloads/pypi.svg)](https://cendor.ai/downloads)
+<!-- cendor:downloads:end -->
+
 [**Install**](#install) · [**The libraries**](#the-libraries-in-depth) · [**See it compose**](#see-it-all-compose) · [**Docs**](https://cendor.ai/docs) · [**Parity matrix**](https://cendor.ai/docs/languages)
 
 *framework-agnostic · ESM-only · local-first · offline by default*
