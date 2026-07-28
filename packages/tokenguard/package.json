@@ -27,7 +27,7 @@
     "./dist/index.js"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "@cendor/core": "workspace:^"

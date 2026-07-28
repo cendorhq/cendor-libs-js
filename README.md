@@ -383,7 +383,7 @@ trick — and why adding a library is free at the call site.
 - **`@cendor/core` hard-dependency only** — provider SDKs, `@opentelemetry/api`, and `better-sqlite3` are all *optional peers / optional deps*.
 - **Offline test suite** — mocked provider clients + golden cross-language vectors; no network, no API key anywhere.
 - **Cross-language conformance** — committed [`fixtures/`](fixtures) generated from the Python libraries (so CI needs no Python); each language verifies artifacts written by the other.
-- **Typed & linted** — full types on every public API, **Biome** + `tsc`. **Node ≥ 18 · ESM-only · Apache-2.0.**
+- **Typed & linted** — full types on every public API, **Biome** + `tsc`. **Node ≥ 20 · ESM-only · Apache-2.0.** (CI tests Node 20 and 22; a version we do not test is not a version we claim.)
 
 ## Scope, status & honest limits
 
