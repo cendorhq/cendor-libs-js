@@ -424,6 +424,13 @@ local checkout of `cendor-libs` beside this repo). Releases are driven by
 [changesets](https://github.com/changesets/changesets) — see [`PUBLISHING.md`](PUBLISHING.md). Publish
 with `pnpm publish` (rewrites `workspace:^` ranges), never `npm publish`.
 
+Before opening a PR, read [`CONTRIBUTING.md`](CONTRIBUTING.md) — setup, the no-cross-imports rule, the
+changeset convention, and the shared-major versioning standard. Conduct:
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+
+**Found a security issue?** Do not open a public issue — report it privately via
+[`SECURITY.md`](SECURITY.md).
+
 ## License & disclaimer
 
 Licensed under the **Apache License 2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
