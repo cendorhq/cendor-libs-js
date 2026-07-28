@@ -6,13 +6,53 @@ on:
 
 concurrency: release-${{ github.ref }}
 
+# Least privilege per job: `verify` only reads the repo; only `release` may write and mint an OIDC
+# token. Declared per job rather than at the workflow level so the gate can never publish.
 permissions:
-  contents: write # commit the version bump + push tags back to main
-  id-token: write # npm provenance via OIDC
+  contents: read
 
 jobs:
-  release:
+  # THE PUBLISH GATE. `ci.yml` and this workflow are both `push: main` triggers, so before this job
+  # existed they ran independently and a RED CI still published — measured on commit 00930d6, which
+  # failed CI and shipped to npm in the same push. This job re-runs the exact same install + build
+  # (typecheck) + type-tests + lint + major-approval + test steps as `ci.yml`, on the same Node
+  # matrix, and `release` declares `needs: verify` — so npm is now downstream of a green build. It
+  # deliberately duplicates `ci.yml` rather than using `workflow_run`: a `workflow_run` trigger runs
+  # in a separate event whose head can differ from the commit that was tested, which is a race on a
+  # publishing workflow. Keep the two step lists in sync; if you add a gate to `ci.yml`, add it here.
+  verify:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck + build
+        run: pnpm build
+      - name: Type Teach regression (decoy overloads still error)
+        run: pnpm check:types
+      - name: Lint
+        run: pnpm lint
+      # A MAJOR is irreversible on npm and re-frames the product for every reader. It is never an
+      # autonomous decision: a major changeset must carry an in-band `Approved-Major:` line.
+      - name: a major bump needs explicit approval
+        run: pnpm check:major
+      - name: Test (no network — committed conformance vectors)
+        run: pnpm test
+
+  release:
+    needs: verify # nothing reaches npm unless every `verify` matrix leg is green
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit the version bump + push tags back to main
+      id-token: write # npm provenance via OIDC
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -8,18 +8,43 @@ flow (no "Version Packages" PR), mirroring the Python release flow.
 
 1. Land your change together with a **changeset**: `pnpm changeset` (pick the affected packages +
    bump type), commit the generated `.changeset/*.md`.
-2. Push (or merge) to `main`. `release.yml` runs on every push to `main` and, in one job:
-   - `pnpm install --frozen-lockfile` + `pnpm build`;
-   - `changeset version` — applies pending changesets: bumps versions and writes CHANGELOGs;
-   - commits that back to `main` as `chore: version packages [skip ci]` (the `[skip ci]` marker
-     stops it re-triggering);
-   - `changeset publish` — publishes the bumped `@cendor/*` packages to npm (pnpm rewrites
-     `workspace:^` ranges to real version ranges at pack time) and tags each `@cendor/<x>@<version>`;
-   - `git push --follow-tags`.
+2. Push (or merge) to `main`. `release.yml` runs on every push to `main` in **two** jobs — a `verify`
+   gate, then `release`, which declares `needs: verify`:
+   - **`verify`** re-runs the full CI gate — `pnpm install --frozen-lockfile`, `pnpm build`
+     (typecheck), `pnpm check:types`, `pnpm lint`, `pnpm check:major`, `pnpm test` — on the same
+     **Node 20 + 22** matrix as [`ci.yml`](.github/workflows/ci.yml). Every matrix leg must be green.
+   - **`release`** then does the publish work:
+     - `pnpm install --frozen-lockfile` + `pnpm build`;
+     - `changeset version` — applies pending changesets: bumps versions and writes CHANGELOGs;
+     - commits that back to `main` as `chore: version packages [skip ci]` (the `[skip ci]` marker
+       stops it re-triggering);
+     - `changeset publish` — publishes the bumped `@cendor/*` packages to npm (pnpm rewrites
+       `workspace:^` ranges to real version ranges at pack time) and tags each `@cendor/<x>@<version>`;
+     - `git push --follow-tags`.
 3. A push with **no** pending changesets versions nothing and publishes nothing — it's a no-op.
 
 Publish this repo's libs **before** `@cendor/sdk` (the SDK depends on them). Versions are
 independent from the Python packages — parity is documented, never version-coupled.
+
+### The publish gate — a red build cannot ship
+
+`ci.yml` and `release.yml` are both `push: main` triggers. Before the `verify` job existed they ran
+**independently**, with no dependency between them, so a failing CI run did not stop a publish:
+commit `00930d6` failed CI and published `@cendor/*` to npm in the same push. `release.yml` now runs
+its own copy of the CI gate first and the publish job declares `needs: verify`, so npm is downstream
+of a green build on both supported Node versions.
+
+Two consequences worth knowing:
+
+- **`verify` deliberately duplicates `ci.yml`'s step list** instead of using `workflow_run`. A
+  `workflow_run` trigger fires as a separate event whose head commit can differ from the one that was
+  tested — a race you do not want on a workflow that publishes. The cost is that the two step lists
+  must be kept in sync: **add a gate to `ci.yml`, add it to `verify` too.**
+- The gate includes `pnpm check:major`, so an unapproved major bump fails before anything is
+  published — a major is irreversible on npm.
+
+An npm publish cannot be undone (unpublish is limited to a 72-hour window and the version can never
+be reused), which is why the gate is in front of the publish rather than a red badge after it.
 
 ## Authentication & provenance (current state)
 
