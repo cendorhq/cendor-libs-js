@@ -9,17 +9,25 @@ audit chain).
 
 Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** deliberately not ported.
 
-> **Reading the version floors after `@cendor/*` 1.0.** The `≥ 0.x` floors in the Notes column are
+> **Reading the version floors on major 3.** The `≥ 0.x` floors in the Notes column are
 > **historical and still correct** — they say which release first shipped a capability, and `≥ 0.16.2`
-> is satisfied by `1.0.0`. They have deliberately not been rewritten: a feature that landed in 0.16.2
-> landed in 0.16.2, and renumbering it would be falsifying the record.
+> is satisfied by every release from `1.0.0` on. They have deliberately not been rewritten: a feature
+> that landed in 0.16.2 landed in 0.16.2, and renumbering it would falsify the record.
 >
-> npm went to **1.0** on 2026-07-27 as a *stability declaration* — no API moved and there is no
-> migration. It exists because a pre-1.0 caret never crosses a minor, so one sibling left behind
-> resolved a second `@cendor/core` (a second event bus) and cross-library cooperation stopped
-> silently. At 1.x a caret spans the whole major, matching Python's `>=1,<2`. `@cendor/contextkit`
-> continues from `2.x` to `3.0.0` rather than counting backwards. Policy:
-> [versioning and support](https://cendor.ai/docs/languages#versioning-and-support).
+> **Every `@cendor/*` library ships major 3 today** — `core`, `cassette`, `guardrails`, `squeeze`,
+> `tokenguard` and `libs` at `3.0.0`, `contextkit` at `3.0.1`, `acttrace` at `3.1.0`. That is the rule,
+> not a coincidence: **all libraries in one language share one major**, so anything on major 3 works
+> with anything else on major 3, while minors and patches stay independent per package (`@cendor/core
+> 3.4.1` beside `@cendor/squeeze 3.0.2` is normal and correct). The reason is mechanical — the libraries
+> cooperate through a single in-process event bus in `@cendor/core`, and two copies of core is two
+> buses, at which point cooperation stops *silently*; a caret spanning a whole major keeps the resolver
+> on one copy. **No API moved when the major did** — neither on the `0.x → 1.0` stability release nor on
+> the alignment onto 3 (`@cendor/contextkit` had already reached major 3 on its own, so the family moved
+> up to meet it rather than counting backwards). There is no migration either way.
+>
+> Majors are **not** coupled across languages — `cendor-core` on PyPI and `@cendor/core` on npm can be
+> the same capability under different numbers, and this matrix, not matching numbers, is the contract.
+> Policy: [versioning and support](https://cendor.ai/docs/languages#versioning-and-support).
 
 ## Libraries (`cendor-libs` ↔ `cendor-libs-js`)
 
@@ -128,7 +136,7 @@ in both languages — opt-in `cendor.sdk` child spans for RAG (`rag.assemble`/`r
 (`memory.load`/`save`), orchestration handoffs, checkpoints, a first-class **tool** domain (source
 `local`|`mcp`, outcome `ok`|`error`|`blocked`), and **MCP** server attribution
 (`mcp.connect`/`mcp.list_tools`), plus a forward-compat `sdk_events` envelope; zero-core, content rules
-unchanged (labels/ids/counts, never bodies), rendered by **Cendor Monitor 0.9**'s SDK-door structure
+unchanged (labels/ids/counts, never bodies), rendered by [**Cendor Monitor**](https://cendor.ai/monitor) 0.9's SDK-door structure
 pages (Orchestration · Tools · MCP · RAG · Memory · Checkpoints). Since **1.17 / 0.21.1** the
 multi-agent pipeline shapes reach behaviour parity: `sequential` / `parallel` / `parallel_async`
 honour the per-run governance surface (`retry`, `on_step`, `guardrails` → `Result.guardrail_decisions`)
