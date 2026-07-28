@@ -38,6 +38,32 @@ The `@cendor/*` packages are **published on npm**. Releases are automated by
 Publish this repo's libs **before** `@cendor/sdk` (the SDK depends on them). Versions are
 independent from the Python packages — parity is documented, never version-coupled.
 
+### A MAJOR needs the approval twice under this flow — and that is deliberate
+
+`check:major` runs in `verify`, and it checks **two** things: pending changesets that declare `major`
+(which need an in-band `Approved-Major:` line), and **`package.json` versions against the last
+published tag** (which need an `APPROVED-MAJOR` file naming the exact token). The second check exists
+because `changeset version` cannot express every target, so a hand-set major would otherwise sail past.
+
+Under the version-PR flow those two checks fire at *different* moments, because
+`changeset version` **consumes the changeset**:
+
+| Moment | Changeset present? | Version bumped? | Which check fires |
+|---|---|---|---|
+| you push the changeset to `main` | yes | no | the changeset check — needs `Approved-Major:` |
+| on the version PR, and after it merges | **no** | **yes** | the tag check — needs `APPROVED-MAJOR` |
+
+So a major release needs **both**: the `Approved-Major:` line in the changeset, *and* an
+`APPROVED-MAJOR` file listing the exact token (e.g. `@cendor/core@4.0.0`). Add the file to the version
+PR when its CI stops on the tag check — the failure prints the exact token to paste. Verified by
+negative control on 2026-07-29: faking `@cendor/squeeze` to `4.0.0` with no changeset and no approval
+file exits **1** with `Add this exact token to cendor-libs-js/APPROVED-MAJOR: @cendor/squeeze@4.0.0`.
+
+**Minor and patch releases are unaffected** — the tag check only fires when the major number rises,
+which is every routine release's no-op. This is not a workaround: a major is irreversible on npm, and
+two independent in-band approvals at two moments is the behaviour you want. Remove the
+`APPROVED-MAJOR` file once the release has published.
+
 ### The publish gate — a red build cannot ship
 
 `ci.yml` and `release.yml` are both `push: main` triggers. Before the `verify` job existed they ran

@@ -81,17 +81,21 @@ jobs:
       #                            `@cendor/<x>@<version>`.
       # So PUBLISHING IS NOW A MERGE, not a push — and `needs: verify` still gates both halves.
       #
-      # `pnpm install --lockfile-only` after versioning is currently a NO-OP and is deliberate
-      # insurance: internal ranges are `workspace:^`, so a version bump does not touch
-      # pnpm-lock.yaml (measured). If an internal range is ever pinned instead, the bump WOULD stale
-      # the lockfile and the Version PR's own `--frozen-lockfile` install would fail. Keep it.
+      # ⚠️ `version:` MUST be a single command. The action splits this string and execs it WITHOUT a
+      # shell, so `a && b` makes `&&` and `b` into ARGUMENTS to `changeset` — measured 2026-07-29:
+      # `changeset version && pnpm install --lockfile-only` failed with "Too many arguments passed to
+      # changesets", so nothing was versioned, the branch got no commits, and opening the PR then died
+      # on "No commits between main and changeset-release/main". If you ever need two steps here, put
+      # them in a package.json script (NOT named `version` — that is an npm lifecycle hook) and call
+      # that. A lockfile refresh is not needed today: internal ranges are `workspace:^`, so a version
+      # bump provably does not touch pnpm-lock.yaml.
       #
       # createGithubReleases is off to preserve existing behaviour — today the npm side ships tags but
       # no GitHub Releases. Turning it on is a reasonable follow-up, not part of this change.
       - name: Version PR, or publish a merged one
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
         with:
-          version: pnpm exec changeset version && pnpm install --lockfile-only
+          version: pnpm exec changeset version
           publish: pnpm exec changeset publish
           commit: "chore: version packages"
           title: "chore: version packages"
