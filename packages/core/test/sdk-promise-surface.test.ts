@@ -7,7 +7,7 @@
  * `undefined`. Worse, `instrument<T>(client: T): T` preserves the client type, so TypeScript still
  * believed they existed: it type-checked and threw at runtime.
  *
- * Measured against the real SDK in `plan/evidence-cendor-libs-ripple-2026-07-26/`:
+ * Measured against the real SDK on 2026-07-26:
  * `UNinstrumented: ctor=APIPromise asResponse=function` / `instrumented: ctor=Promise asResponse=undefined`.
  *
  * What must NOT change while fixing it — each pinned below:

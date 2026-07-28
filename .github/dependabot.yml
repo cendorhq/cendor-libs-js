@@ -15,23 +15,32 @@ updates:
     groups:
       dev-dependencies:
         dependency-type: development
-    # Deferred majors — see plan/REPORT-TS7-OPENAI6-FEASIBILITY-2026-07-19.md §7.3.
-    # (vitest is deliberately NOT ignored — handled as a manual bump.)
+    # Deferred majors. Each is a deliberate hold with the reason stated in-band below — a major that
+    # costs a migration or breaks a supported runtime is a decision we take on purpose, not one a bot
+    # takes for us. Remove an entry once its stated condition is met.
+    # (vitest is deliberately NOT ignored — it is handled as a manual bump.)
     ignore:
-      # TS 7: revisit at 7.1 (new compiler API) after ecosystem soak.
+      # TypeScript 7: a rewritten compiler with a new API surface. Revisit at 7.1, after the
+      # ecosystem (biome, vitest, the type-test fixtures) has soaked on it.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
-      # @types/node: track the lowest supported runtime (Node 22), not Node 26.
+      # @types/node: held at a major close to the runtime floor in `engines.node` (Node 20/22, the CI
+      # matrix) rather than tracking the newest Node. On a newer major, an API that only exists on a
+      # newer runtime typechecks here and then fails for a consumer on a supported one. Bump this
+      # when the `engines.node` floor moves, not before.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
-      # biome 2: config-migration major — its own separate decision.
+      # biome 2: a config-migration major (biome.json schema + rule renames). Its own separate
+      # decision, taken with the config change in the same PR — never as an unattended bump.
       - dependency-name: "@biomejs/biome"
         update-types: ["version-update:semver-major"]
-      # fast-check 4: dev-only property-testing major — its own separate decision.
+      # fast-check 4: dev-only property-testing major. Nothing ships to a consumer, so there is no
+      # urgency; taken deliberately together with the generator/arbitrary API changes it needs.
       - dependency-name: "fast-check"
         update-types: ["version-update:semver-major"]
-      # better-sqlite3 13+: crashes Node 20 vitest workers (PR #13 closed 2026-07-24). We keep Node 20
-      # support until the public flip, so stay on 12.x. REMOVE this ignore and take 13.x when Node 20
-      # is dropped from the CI matrix.
+      # better-sqlite3 13+: its prebuilt native binding crashes the vitest worker processes on
+      # Node 20 (measured; the upgrade PR was closed 2026-07-24 for this). Node 20 is in the CI
+      # matrix and in `engines.node`, so stay on 12.x. REMOVE this ignore and take 13.x when Node 20
+      # is dropped from the matrix.
       - dependency-name: "better-sqlite3"
         update-types: ["version-update:semver-major"]

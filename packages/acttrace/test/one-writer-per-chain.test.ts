@@ -8,9 +8,10 @@
  * reopen. Two chains interleave into one file and `verify()` reports
  * `broken link at seq N: prev_hash mismatch`.
  *
- * Measured before the fix (`plan/evidence-cendor-libs-ripple-2026-07-26/probe_f2_ts_double_writer.mjs`):
- * byte-identical to the Python twin — a duplicate seq, and no row restarting from GENESIS. The
- * written-up cause ("a reopen restarts from genesis") was wrong in both languages.
+ * Measured before the fix on 2026-07-26, with a probe that opened two live `AuditLog`s on one path
+ * against the published packages: byte-identical to the Python twin — a duplicate seq, and no row
+ * restarting from GENESIS. The written-up cause ("a reopen restarts from genesis") was wrong in both
+ * languages.
  */
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

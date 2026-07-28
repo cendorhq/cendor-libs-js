@@ -8,9 +8,11 @@ import { context, trace as otelTrace } from '@opentelemetry/api';
  * `cendor.traceId`. In a monitor that meant one logical unit of work rendered as two unrelated rows,
  * its governance fanned out to both, and per-run governance counts doubled.
  *
- * Rails these tests exist for (`plan/PLAN-MONITOR-FITGAP-REMEDIATION.md` §2):
+ * Rails these tests exist for:
  *  * rail 2/3 — the scope binds through `context.with` (AsyncLocalStorage `run()`), never `enterWith`.
- *    The docker leg on node 20/22 lives in the plan's W6 probes; this file pins the semantics.
+ *    `enterWith` only scopes as intended on node >= 24; on node 20/22 it leaks into concurrent flows
+ *    and is not restored on exit. That leg is verified in docker on the supported Node versions; this
+ *    file pins the semantics.
  *  * rail 4 — attribution is asserted with TWO OVERLAPPING scopes and a client that takes real time.
  *    An instant stub finishes scope A before scope B starts, so nothing ever interleaves and every
  *    cross-scope defect stays invisible.

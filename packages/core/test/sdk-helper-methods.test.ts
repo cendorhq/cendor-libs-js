@@ -8,8 +8,7 @@
  *
  *     TypeError: Body is unusable: Body has already been read
  *
- * Measured against the real openai 6.49.0 SDK on 2026-07-27
- * (`plan/evidence-ripple-followup-2026-07-27/`), on the **published shelf**:
+ * Measured against the real openai 6.49.0 SDK on 2026-07-27, on the **published shelf**:
  *
  *     UNinstrumented responses.parse   ok
  *     instrumented   responses.parse   THREW TypeError: Body is unusable   LLMCalls=0     (0.16.1)
