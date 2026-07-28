@@ -395,6 +395,45 @@ describe('instrument() — interceptors', () => {
     }
   });
 
+  it('Reroute(messages) back-maps onto Gemini `contents` (string / Content / Part)', async () => {
+    // `extractRequest` normalizes a non-array `contents` into a canonical {role, content} message;
+    // writing that object back onto `contents` is a shape @google/genai rejects, so a redacting
+    // interceptor scrubbed the payload and then made the call unsendable.
+    let seen: unknown;
+    const client = {
+      models: {
+        generateContent: async (p: { contents: unknown }) => {
+          seen = p.contents;
+          return { usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } };
+        },
+      },
+    };
+    instrument(client);
+    const rewrite = (call: unknown): unknown => {
+      const msgs = (call as { messages: Record<string, unknown>[] }).messages;
+      return new Reroute({
+        messages: msgs.map((m) =>
+          'content' in m
+            ? { ...m, content: 'clean' }
+            : { ...m, parts: [{ text: 'clean' }] as unknown },
+        ),
+      });
+    };
+    addInterceptor(rewrite);
+    try {
+      await client.models.generateContent({ model: 'gemini-2.0-flash', contents: 'dirty' });
+      expect(seen).toBe('clean'); // string in, string out
+
+      await client.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: [{ role: 'user', parts: [{ text: 'dirty' }] }],
+      });
+      expect(seen).toEqual([{ role: 'user', parts: [{ text: 'clean' }] }]);
+    } finally {
+      removeInterceptor(rewrite);
+    }
+  });
+
   it('MISS lets the real call proceed', async () => {
     const client = openAiChatClient({ prompt_tokens: 2, completion_tokens: 2 });
     instrument(client);

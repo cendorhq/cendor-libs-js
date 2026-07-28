@@ -224,7 +224,8 @@ function streamProvider(provider: string): string {
 
 /** Per-provider kwarg carrying request messages (so `Reroute({ messages })` rewrites the right field).
  * Chat Completions / Anthropic / Bedrock / Ollama use `messages`; the Responses API uses `input`;
- * Gemini uses `contents`. */
+ * Gemini uses `contents` — but it also needs its own value shape, so `applyReroute` routes `google`
+ * through {@link geminiContents} rather than this table. */
 const MESSAGES_KWARG: Record<string, string> = { openai_responses: 'input', google: 'contents' };
 
 /**
@@ -465,6 +466,44 @@ function memoizeParseResponse(promise: unknown): void {
 
 const MISSING = Symbol('missing');
 
+/** Keys that mark a value as already Gemini-native — a `Content` (`parts`) or a `Part`. */
+const GEMINI_SHAPE_KEYS = ['parts', 'text', 'inlineData', 'inline_data', 'fileData', 'file_data'];
+
+/**
+ * Back-map rerouted messages onto Gemini's `contents` shape.
+ *
+ * `extractRequest` normalizes a **non-array** `contents` — the very common
+ * `generateContent({ contents: 'summarize…' })` — into one canonical `{role, content}` message so every
+ * interceptor sees every provider the same way. Writing that message object straight back onto
+ * `contents` is what `@google/genai` rejects: it takes a string, a `Content` (`{role, parts}`) or a
+ * `Part`, never `{role, content}`. So a guard's redact-before-send scrubbed the payload correctly and
+ * then made the call impossible to send.
+ *
+ * The map mirrors the `openai_embeddings` one — the original request's shape is what goes back:
+ * a `Content`/`Part` (an array input, whose shape the scrub preserved) passes through untouched, a
+ * canonical message becomes `{role, parts: [{text}]}`, and a string input that produced a single
+ * text message goes back as a **string**.
+ */
+function geminiContents(messages: unknown, original: unknown): unknown {
+  const list = Array.isArray(messages) ? messages : [messages];
+  const mapped = list.map((m) => {
+    if (m === null || typeof m !== 'object') return m; // a bare string part stays one
+    const rec = m as Record<string, unknown>;
+    if (GEMINI_SHAPE_KEYS.some((k) => k in rec)) return m; // already a Content / Part
+    if (!('content' in rec)) return m; // unknown shape — leave it to the SDK
+    const role = rec.role === 'assistant' || rec.role === 'model' ? 'model' : 'user';
+    return { role, parts: [{ text: String(rec.content ?? '') }] };
+  });
+  if (typeof original === 'string' && mapped.length === 1) {
+    const parts = (mapped[0] as Record<string, unknown> | undefined)?.parts;
+    if (Array.isArray(parts) && parts.length === 1) {
+      const text = (parts[0] as Record<string, unknown> | undefined)?.text;
+      if (typeof text === 'string') return text; // string in, string out
+    }
+  }
+  return Array.isArray(messages) ? mapped : mapped[0];
+}
+
 function applyReroute(
   call: LLMCall,
   kwargs: Record<string, unknown>,
@@ -487,6 +526,9 @@ function applyReroute(
       const contents = msgs.map((m) => String(m.content ?? ''));
       const original = kwargs.input;
       kwargs.input = typeof original === 'string' && contents.length > 0 ? contents[0] : contents;
+    } else if (provider === 'google') {
+      // Gemini takes a string / Content / Part on `contents`, never a message dict — back-map it.
+      kwargs.contents = geminiContents(messages, kwargs.contents);
     } else {
       kwargs[MESSAGES_KWARG[provider] ?? 'messages'] = messages;
     }

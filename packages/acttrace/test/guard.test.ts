@@ -142,6 +142,74 @@ it('redact-before-send scrubs the provider payload', async () => {
   expect(payloadOf(redacted!).action).toBe('redacted');
 });
 
+// --------------------------------------------------------------------- Gemini `contents` back-map
+
+interface FakeGemini {
+  models: { generateContent: (p: Record<string, unknown>) => Promise<unknown> };
+}
+/** A `@google/genai`-shaped client that records the `contents` the SDK would have been handed. */
+function geminiClient(received: { contents?: unknown }): FakeGemini {
+  return instrument({
+    models: {
+      generateContent: async (kwargs: Record<string, unknown>) => {
+        received.contents = kwargs.contents;
+        return { usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } };
+      },
+    },
+  }) as unknown as FakeGemini;
+}
+
+it('redact-before-send keeps a Gemini string `contents` a string', async () => {
+  // `extractRequest` normalizes a non-array `contents` into one canonical {role, content} message so
+  // interceptors see every provider alike. Writing that message object straight back onto `contents`
+  // is what @google/genai rejects (it takes a string | Content | Part), so a redacted Gemini call
+  // could not proceed at all.
+  const received: { contents?: unknown } = {};
+  const cl = geminiClient(received);
+  const g = guard(Policy.default());
+  addInterceptor(g);
+  try {
+    await cl.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: 'repeat back: mail me at alice@example.com',
+    });
+  } finally {
+    removeInterceptor(g);
+  }
+  expect(
+    JSON.stringify(received.contents),
+    'an OpenAI-style message list was written into `contents`',
+  ).not.toContain('"content"');
+  expect(typeof received.contents, 'a string `contents` came back as a non-string').toBe('string');
+  expect(String(received.contents)).not.toContain('alice@example.com');
+  expect(String(received.contents)).toContain('<redacted>');
+});
+
+it('redact-before-send keeps a Gemini `contents` array in Content shape', async () => {
+  const received: { contents?: unknown } = {};
+  const cl = geminiClient(received);
+  const g = guard(Policy.default());
+  addInterceptor(g);
+  try {
+    await cl.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: [{ role: 'user', parts: [{ text: 'mail me at alice@example.com' }] }],
+    });
+  } finally {
+    removeInterceptor(g);
+  }
+  const contents = received.contents as { role?: string; parts?: { text?: string }[] }[];
+  expect(Array.isArray(contents)).toBe(true);
+  expect(contents[0]!.role).toBe('user');
+  expect(Array.isArray(contents[0]!.parts), 'the Content shape lost its `parts`').toBe(true);
+  expect(contents[0]!.parts![0]!.text).toContain('<redacted>');
+  expect(JSON.stringify(contents)).not.toContain('alice@example.com');
+  expect(
+    JSON.stringify(contents),
+    'an OpenAI-style message key leaked into `contents`',
+  ).not.toContain('"content"');
+});
+
 it('without audit still enforces (blocks)', async () => {
   const calls = { n: 0 };
   const cl = client(calls);
