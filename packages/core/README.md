@@ -15,7 +15,7 @@ Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Pytho
 
 ## Telemetry: it flows (and `CENDOR_TELEMETRY=off` stops it)
 
-Since **0.15.0**, with OpenTelemetry installed and a provider configured **by your app**, core emits
+With OpenTelemetry installed and a provider configured **by your app**, core emits
 `gen_ai.*` spans for every governed call as soon as you call `instrument()` — plus `governance.*` spans
 for the budget/guardrail decisions the other libraries make. No emitter to attach, no exporter to
 install: core has **no endpoint of its own** and emits into your provider. `CENDOR_TELEMETRY=off` turns
@@ -41,20 +41,21 @@ await client.chat.completions.create({
 }); // → gpt-4o 152 0.000... USD
 ```
 
-Streaming, the Responses API, Anthropic, interceptors (record/replay), and `Reroute`
-(model downgrade / message redaction) all flow through the same `instrument()`.
+Streaming, the Responses API, embeddings, every other detected provider, interceptors
+(record/replay), and `Reroute` (model downgrade / message redaction) all flow through the same
+`instrument()`.
 
 ## Surface
 
 | Symbol | Notes |
 |---|---|
-| `instrument(client)` | wraps OpenAI (Chat + Responses + Embeddings, since 0.6.0) / Anthropic clients; idempotent; async + streaming |
+| `instrument(client)` | wraps **OpenAI** (Chat + Responses + Embeddings) · **Anthropic** · **Bedrock** (a client exposing `converse` / `converse_stream`) · **Gemini** (`@google/genai` + the legacy model surface) · **Ollama** · **Hugging Face**, all detected by *shape*; idempotent; async + streaming |
 | `instrumentTool(fn)` | emits a `ToolCall` per invocation |
 | `Money`, `Usage`, `LLMCall`, `ToolCall` | the cross-language event vocabulary (`events/1`) |
 | `bus` | `subscribe` / `unsubscribe` / `emit` |
 | `prices` | `estimate` / `models` / `refresh` / staleness — exact `Decimal`, never floats (`prices/1`) |
 | `tokens` | `count` / `method` / `family` / `register` via `js-tiktoken` |
-| `trace(id, fn)` / `currentTraceId()` | ambient correlation (async-callback scope; inject `AsyncLocalStorage` via `installTraceContext`) |
+| `trace(id, fn)` / `currentTraceId()` | ambient correlation (async-callback scope, isolated by a real `AsyncLocalStorage` on Node by default; `installTraceContext` overrides the store for a runtime without `node:async_hooks`) |
 | `Reroute`, `addInterceptor`, `MISS` | pre-call interception seam used by `@cendor/cassette` & `@cendor/acttrace` |
 
 ## Parity & conformance
@@ -63,3 +64,7 @@ Field names map `snake_case` (Python) → `camelCase` (TS); type and error names
 (`UnknownModelError` in both). Cost math, the model table, `Money` semantics, and token counts are
 verified against golden vectors generated from the Python reference — see
 [`fixtures/`](../../fixtures). Money is compared by exact decimal *value*.
+
+---
+
+**Full docs:** [cendor.ai/docs/core](https://cendor.ai/docs/core) · part of the Cendor stack ([cendorhq/cendor-libs-js](https://github.com/cendorhq/cendor-libs-js)).

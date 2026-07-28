@@ -32,7 +32,7 @@ const client = instrument(openai);
 install([
   rules.keywordDeny(['ignore previous instructions'], { action: 'block' }),   // prompt-injection floor
   rules.regexRule(/\bsk-[A-Za-z0-9]{20,}\b/, { action: 'redact', stage: 'input' }), // scrub leaked keys
-  rules.urlAllowlist(['docs.cendor.ai'], { stage: 'input' }),                 // only sanctioned links
+  rules.urlAllowlist(['cendor.ai'], { stage: 'input' }),                      // only sanctioned links
 ]);
 
 await client.chat.completions.create({ model: 'gpt-4o', messages });
@@ -85,4 +85,6 @@ Deterministic pure-compute TS mirror of `cendor.guardrails` — same four stages
 `guardrail_decision` bus event (snake_case wire keys). Runs on Node, edge, and the browser (no
 `node:*` imports). The full split is in the [parity matrix](https://cendor.ai/docs/languages).
 
-*Part of the Cendor stack — github.com/cendorhq/cendor-libs-js. Powered by PowerAI Labs.*
+---
+
+**Full docs:** [cendor.ai/docs/guardrails](https://cendor.ai/docs/guardrails) · part of the Cendor stack ([cendorhq/cendor-libs-js](https://github.com/cendorhq/cendor-libs-js)).

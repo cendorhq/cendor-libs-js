@@ -6,10 +6,10 @@
 npm i @cendor/squeeze
 ```
 
-Shrink long prompts to hit a token budget and expand them back exactly — the same input always produces the same output, with no LLM and no model download. Compression returns a *handle*; the original is always restorable, byte-for-byte. The TypeScript port of [`cendor-squeeze`](https://github.com/cendorhq/cendor-libs).
+Shrink long prompts to hit a token budget and expand them back exactly — the same input always produces the same output, with no LLM and no model download. Compression returns a *handle*; the original is always restorable, byte-for-byte. The TypeScript port of [`cendor.squeeze`](https://github.com/cendorhq/cendor-libs/tree/main/packages/cendor-squeeze).
 
-The TypeScript port of [`cendor-squeeze`](https://github.com/cendorhq/cendor-libs). Satisfies
-`@cendor/core`'s `Compressor` protocol by shape, so context tooling can use it without importing it.
+Satisfies `@cendor/core`'s `Compressor` protocol by shape, so context tooling can use it without
+importing it.
 
 Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Python) wires it up — or point it at [cendor.ai/docs/for-ai-assistants](https://cendor.ai/docs/for-ai-assistants).
 
@@ -46,8 +46,13 @@ Faithful port of the Python package: same public symbols, defaults, string-liter
 invalid-`fidelity` throws). Python `snake_case` keyword args become a trailing options object;
 `content_ref`/`restore_map` stay snake_case inside `toDict()` for cross-language persistence.
 
-One deliberate difference: token counts. `@cendor/core` bundles `js-tiktoken`, so `tokens.count`
-returns **real tiktoken** numbers for `gpt-4o` (not Python's forced `ceil(len/4)` test heuristic).
-The compressors call the same counter their budget checks do, so every guarantee — `targetTokens`
-never exceeded, reversibility, ordering — holds identically; only exact token *counts* differ from
-the Python test fixtures.
+One deliberate difference lives in the **test fixtures**, not the counter: both languages count with
+a real tokenizer (`@cendor/core` bundles `js-tiktoken`; `cendor-core` requires `tiktoken`), but the
+Python squeeze tests monkeypatch tiktoken away to pin a `ceil(len/4)` character fallback, so their
+golden numbers are not the ones this port asserts. The compressors call the same counter their budget
+checks do, so every guarantee — `targetTokens` never exceeded, reversibility, ordering — holds
+identically.
+
+---
+
+**Full docs:** [cendor.ai/docs/squeeze](https://cendor.ai/docs/squeeze) · part of the Cendor stack ([cendorhq/cendor-libs-js](https://github.com/cendorhq/cendor-libs-js)).

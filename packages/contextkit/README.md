@@ -75,8 +75,13 @@ name. Two deliberate adaptations:
    `async assemble()` that awaits summarizers (sync or async) and the compressor. The Python
    "sync path falls back to truncation for an async summarizer" behavior therefore has no analog —
    async summarizers are simply awaited. `whatif` and the provider adapters are async accordingly.
-2. **Real token counts.** `@cendor/core` bundles js-tiktoken, so counts are the exact tiktoken
-   numbers, not Python's forced offline `ceil(len/4)` heuristic. Per-message framing is identical
+2. **Real token counts, bundled.** `@cendor/core` bundles js-tiktoken, so counts are the exact
+   tiktoken numbers with nothing to download — the same counts Python gets from `cendor-core`'s
+   required `tiktoken` dependency. Per-message framing is identical
    (`priming=3`, `perMessage=4`, derived — not hardcoded — from `tokens.count`), so every
    structural guarantee ports verbatim: `used <= budget`, `used === tokens.count(messages, model)`
    for text, deterministic ordering, and roundtrips.
+
+---
+
+**Full docs:** [cendor.ai/docs/contextkit](https://cendor.ai/docs/contextkit) · part of the Cendor stack ([cendorhq/cendor-libs-js](https://github.com/cendorhq/cendor-libs-js)).

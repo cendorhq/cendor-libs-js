@@ -9,7 +9,7 @@
 
 Composable TypeScript primitives for context, cost, testing, and governance — the layer beneath your LLM app. The TypeScript/JavaScript port of the [Cendor libraries](https://github.com/cendorhq/cendor-libs).
 
-[![npm: @cendor/libs](https://img.shields.io/npm/v/@cendor/libs.svg?label=%40cendor%2Flibs)](https://www.npmjs.com/package/@cendor/libs) ![Node](https://img.shields.io/badge/node-%E2%89%A518-blue) ![License](https://img.shields.io/badge/license-Apache_2.0-blue) ![module: ESM](https://img.shields.io/badge/module-ESM-blue) ![types: TypeScript](https://img.shields.io/badge/types-TypeScript-blue) [![Biome](https://img.shields.io/badge/lint-biome-60a5fa)](https://biomejs.dev)
+[![npm: @cendor/libs](https://img.shields.io/npm/v/@cendor/libs.svg?label=%40cendor%2Flibs)](https://www.npmjs.com/package/@cendor/libs) ![Node](https://img.shields.io/badge/node-%E2%89%A520-blue) ![License](https://img.shields.io/badge/license-Apache_2.0-blue) ![module: ESM](https://img.shields.io/badge/module-ESM-blue) ![types: TypeScript](https://img.shields.io/badge/types-TypeScript-blue) [![Biome](https://img.shields.io/badge/lint-biome-60a5fa)](https://biomejs.dev)
 
 <!-- cendor:downloads:start — self-hosted badges from cendor.ai (no third party in the render path).
      The numbers live inside the SVGs, regenerated daily from the committed ledger, so this file
@@ -288,12 +288,12 @@ const [ok, detail] = verify('evidence.jsonl', { key: 'k' });   // tamper-evident
 
 > Kept tiny on purpose — it's the blast radius for every other tool.
 
-- **`instrument()`** — wrap any client once: **OpenAI** (Chat Completions **and** the Responses API) **· Anthropic · AWS Bedrock · Google Gemini** (`google-genai`) **· Ollama · Hugging Face**, detected by *shape*. Sync, async, **and streaming**; idempotent and additive. `instrumentTool()` does the same for your tools (emits `ToolCall`s).
+- **`instrument()`** — wrap any client once: **OpenAI** (Chat Completions **and** the Responses API) **· Anthropic · AWS Bedrock · Google Gemini** (`google-genai`) **· Ollama · Hugging Face**, detected by *shape*. Sync, async, **and streaming**; idempotent and additive. `instrumentTool()` does the same for your tools (emits `ToolCall`s). Because detection is by shape, Bedrock is recognised on a client exposing `converse()` / `converse_stream()`; aws-sdk-v3's `send(ConverseCommand)` carries no such method, so that call style is captured through [`@cendor/sdk`](https://github.com/cendorhq/cendor-sdk-js)'s Bedrock provider instead — see the [parity matrix](https://cendor.ai/docs/languages).
 - **Event bus** — `subscribe` / `unsubscribe` / `emit`; one failing subscriber never starves another (the first exception re-raises after all run).
 - **Interceptor seam** — `addInterceptor` + `Reroute` / `MISS` powers replay (cassette) and reroute/block (tokenguard) **without a second patch point**.
 - **Token counting** — `tokens.count` / `method` / `family` / `register` via bundled `js-tiktoken` (real tiktoken numbers).
 - **Offline-first *and* refreshable prices** — bundled dated snapshot; `estimate() → Money` (never a float); optional `refresh(...)` from live no-auth sources with a staleness signal.
-- **Correlation & OTel** — `trace(id, fn)` / `currentTraceId()` (inject `AsyncLocalStorage` via `installTraceContext`); optional `@opentelemetry/api` peer for `gen_ai.*` spans + `ingest()`.
+- **Correlation & OTel** — `trace(id, fn)` / `currentTraceId()`, isolated by a real `AsyncLocalStorage` on Node **by default** (`installTraceContext` is only an override seam, for a runtime without `node:async_hooks`); with the optional `@opentelemetry/api` peer **and a provider your app configured**, `gen_ai.*` spans arm themselves at the first `instrument()` — `CENDOR_TELEMETRY=off` stops every Cendor emitter process-wide. `ingest()` adopts calls a managed runtime already traced.
 - **Structural protocols** — `Compressor`, `EvictionStrategy`, `Sink`, `Subscriber`, `Handle` — how the tools interlock without coupling.
 
 ```ts
@@ -408,7 +408,7 @@ Each package also ships its own README (linked in the table above).
 
 ## Develop
 
-A pnpm workspace of seven packages:
+A pnpm workspace of eight packages — the seven libraries plus the `@cendor/libs` umbrella:
 
 ```bash
 pnpm install

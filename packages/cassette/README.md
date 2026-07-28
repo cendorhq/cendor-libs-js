@@ -74,3 +74,7 @@ replay to distinct entries.
   concurrent `using()` blocks on the shared bus never capture each other's events.
 - `localEmbeddingScorer` throws in JS (no static-embedding model is bundled) — wire your own via
   `embeddingScorer(embedFn)`.
+
+---
+
+**Full docs:** [cendor.ai/docs/cassette](https://cendor.ai/docs/cassette) · part of the Cendor stack ([cendorhq/cendor-libs-js](https://github.com/cendorhq/cendor-libs-js)).

@@ -26,7 +26,7 @@ preserved, `prev_hash` text-prepended, `GENESIS` = 64 zeros).
 Using an AI coding assistant? `npx @cendor/init` (TS) / `uvx cendor-init` (Python) wires it up — or point it at [cendor.ai/docs/for-ai-assistants](https://cendor.ai/docs/for-ai-assistants).
 
 
-## The mirror attaches itself (0.12.0)
+## The mirror attaches itself
 
 With OpenTelemetry installed and a provider configured **by your app**, `new AuditLog('support', { path: 'audit.jsonl' })` also streams every
 chained entry to your backend as an `audit.<type>` span — no `mirror=` line. Pass { mirror: false } to never mirror
@@ -73,7 +73,7 @@ const [ok, detail] = verify('audit.jsonl'); // re-walk offline; catches any edit
 | `verify(path, { key?, expectedHead?, expectEntries? })` | `[ok, detail]`. Never throws. Detects tamper / bad-sig / reorder / truncation. |
 | `frameworks()` | `['eu_ai_act', 'gdpr', 'iso_42001', 'nist_rmf']`. |
 | `scan(obj, policy?)` / `redact(obj, policy?)` | Pure detection (counts only) / scrub. `Policy.default/gdpr/pci/strict`. |
-| `guard(policy?, audit?, onBlock?)` — dual-shape since 0.6.0: also `guard(opts, fn)` scope form | Interceptor for `addInterceptor`, or install/remove around `fn`: block (throw) / redact-before-send (`Reroute`) / flag. `PolicyViolation.findings`. |
+| `guard(policy?, audit?, onBlock?)` — dual-shape: also a `guard(opts, fn)` scope form | Interceptor for `addInterceptor`, or install/remove around `fn`: block (throw) / redact-before-send (`Reroute`) / flag. `PolicyViolation.findings`. |
 | `resolveFindings(findings, policy?)` | guard's per-category action resolution, exported for composers: `{ block, redact, flag }`. |
 | `DETECTORS`, `registerDetector`, `detectors`, `Detector` | The 20-detector registry (validators: Luhn / IBAN mod-97 / Verhoeff / ABA / SSN / phone / BIC). |
 | `enableLocalePack('uk'\|'in')`, `enableEntropyDetector()`, `LOCALE_PACKS` | Opt-in packs (off by default). |
@@ -101,3 +101,7 @@ synchronous via `node:crypto`; storage (fs/memory) and crypto are lazily require
 package never forces Node built-ins into a browser bundle. NER is optional — install the `compromise`
 peer dep to enable `nerRedactor()` (English-only, lighter than Python's Presidio backend); the default
 install stays pure-regex and dependency-light.
+
+---
+
+**Full docs:** [cendor.ai/docs/acttrace](https://cendor.ai/docs/acttrace) · part of the Cendor stack ([cendorhq/cendor-libs-js](https://github.com/cendorhq/cendor-libs-js)).

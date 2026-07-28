@@ -59,18 +59,20 @@ for (const row of report(['feature'])) {
 | `onUnpricedWarning(fn)` | Register a listener for unpriced-model warnings (returns an unsubscribe). |
 | `@cendor/tokenguard/sinks` | `SQLiteSink`, `QueueSink`, `OTelSink`. |
 
-**Spend reaches your backend on its own (0.8.0).** With `@opentelemetry/api` installed and a provider
+**Spend reaches your backend on its own.** With `@opentelemetry/api` installed and a provider
 configured by your app, every priced row is also written to `gen_ai.client.token.usage` / `.cost.usd`
 counters through an **internal additive tap** (dimensioned by `model` + your `track(...)` tags) — no
 `useSink` line needed. `CENDOR_TELEMETRY=off` disables it. Your sink slot stays yours: the tap never
-displaces it, and it stands down when your own sink already *is* an `OTelSink`. Since **0.7.0**
-`OTelSink` acquires its meter lazily, so constructing one before your provider is no longer a
-permanent silent no-op.
+displaces it, and it stands down when your own sink already *is* an `OTelSink`. `OTelSink` acquires
+its meter lazily, so constructing one before your provider exists is not a permanent silent no-op.
 
-**`onExceed` modes:** `'raise'` (post-flight, stops the *next* call — overshoots by one),
-`'block'` (pre-flight hard cap — never overspends), `'clamp'` (inject a provider output ceiling —
+**`onExceed` modes — the complete set:** `'raise'` (post-flight, stops the *next* call — overshoots by
+one), `'block'` (pre-flight hard cap — never overspends), `'clamp'` (inject a provider output ceiling —
 requires `tokens=`), `'downgrade'` (reroute to a cheaper model — requires `usd=` + a `downgrade`
-map), `'truncate'` (degrade gracefully — resolves to `undefined`), or a callable `(ctx) => …`.
+map), `'truncate'` (degrade gracefully — resolves to `undefined`), `'break'` (mid-stream breaker —
+counts output tokens as chunks arrive, including visible thinking, and cuts the stream the moment it
+crosses the remaining cap, so one runaway *streamed* call can't blow past it), or a callable
+`(ctx) => …`.
 
 ## Parity note
 
@@ -86,8 +88,13 @@ Adaptations for the async, single-threaded TS runtime:
 - `warnings.warn(UnpricedModelWarning)` → a capturable/escalatable channel: register via
   `onUnpricedWarning(fn)` (deduped once-per-model, cleared by `reset()`); with no listener it falls
   back to `console.warn`.
-- Token counts use the bundled **js-tiktoken** (real tiktoken numbers), not Python's forced
-  `ceil(len/4)` heuristic — so recorded **cost** (from reported usage) is identical, while pre-flight
-  **projections** use exact token counts. The OS-thread thread-safety tests are dropped (Node is
+- Token counts use the **bundled** js-tiktoken — real tiktoken numbers with nothing to download and
+  no optional extra, the same counts `cendor.tokenguard` gets from `cendor-core`'s required `tiktoken`
+  dependency. So both recorded **cost** (from reported usage) and pre-flight **projections** agree
+  across the two languages. The OS-thread thread-safety tests are dropped (Node is
   single-threaded); `QueueSink` is an async FIFO drain loop rather than a daemon thread, preserving
   the observable semantics (FIFO order, back-pressure, idempotent close, flush→close ordering).
+
+---
+
+**Full docs:** [cendor.ai/docs/tokenguard](https://cendor.ai/docs/tokenguard) · part of the Cendor stack ([cendorhq/cendor-libs-js](https://github.com/cendorhq/cendor-libs-js)).
