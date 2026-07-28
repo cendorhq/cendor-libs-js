@@ -1,0 +1,137 @@
+name: Bug report
+description: A @cendor/* TypeScript package behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Three quick routing notes before you start — the third one is the most
+        common non-bug we get.
+
+        - **Security vulnerability?** Do not open a public issue — report it privately through
+          [GitHub Private Vulnerability Reporting](https://github.com/cendorhq/cendor-libs-js/security/advisories/new)
+          (details in [`SECURITY.md`](https://github.com/cendorhq/cendor-libs-js/blob/main/SECURITY.md)).
+        - **Wrong repo?** This one is the **TypeScript** libraries workspace (`@cendor/*` on npm). The
+          Python reference implementation is
+          [cendor-libs](https://github.com/cendorhq/cendor-libs/issues); the agent loop, handoff, tool
+          schemas, and provider response normalization live in
+          [cendor-sdk-js](https://github.com/cendorhq/cendor-sdk-js/issues).
+        - **Does TypeScript behave differently from Python?** That may be a *documented* parity gap
+          rather than a bug. Check [`docs/parity.md`](https://github.com/cendorhq/cendor-libs-js/blob/main/docs/parity.md)
+          and the [parity matrix](https://cendor.ai/docs/languages) first — the matrix is the contract
+          between the two languages, not matching version numbers. If the gap is listed, an issue
+          asking us to *close* it is a feature request; if it is **not** listed, that itself is worth
+          filing here.
+  - type: dropdown
+    id: package
+    attributes:
+      label: Which package?
+      description: This workspace publishes eight. Pick the one the bug is in.
+      options:
+        - "@cendor/core"
+        - "@cendor/tokenguard"
+        - "@cendor/contextkit"
+        - "@cendor/squeeze"
+        - "@cendor/guardrails"
+        - "@cendor/cassette"
+        - "@cendor/acttrace"
+        - "@cendor/libs (the umbrella meta-package)"
+        - Not sure / more than one
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version of that package
+      description: Minors and patches are independent per package, so give the exact one (`npm ls @cendor/core`, or read it out of your lockfile).
+      placeholder: "@cendor/core 3.0.0"
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node version and OS
+      description: These packages declare `engines.node >= 20`, and CI runs 20 and 22. A bug that only appears on one of them is a useful fact — say which.
+      placeholder: Node 22.14.0, Windows 11
+    validations:
+      required: true
+  - type: dropdown
+    id: package-manager
+    attributes:
+      label: Package manager
+      description: How the dependency tree got resolved matters — the duplicate-core failure below is a resolution problem, not a code problem.
+      options:
+        - pnpm
+        - npm
+        - yarn
+        - bun
+        - Deno
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider SDK involved
+      description: No provider SDK is a dependency of these libraries — `instrument()` duck-types whatever client you hand it. Pick the first option if your repro drives a provider-shaped fake; that is the fastest kind of repro for us to act on.
+      options:
+        - None — a provider-shaped fake client, or no provider at all
+        - openai
+        - "@anthropic-ai/sdk"
+        - "@google/genai"
+        - "@google/generative-ai (legacy)"
+        - ollama
+        - "@huggingface/inference"
+        - AWS Bedrock (a boto-shaped `converse()` client)
+        - AWS Bedrock (aws-sdk-v3 `send(ConverseCommand)`)
+        - Other / several
+    validations:
+      required: true
+  - type: input
+    id: provider-version
+    attributes:
+      label: Provider SDK version (if one is involved)
+      placeholder: openai 6.49.0
+  - type: textarea
+    id: one-core
+    attributes:
+      label: How many copies of @cendor/core are installed?
+      description: |
+        Paste the output of `pnpm why @cendor/core` (or `npm ls @cendor/core`). **Two installed copies
+        of `@cendor/core` is two event buses**, and cross-library cooperation then stops *silently* —
+        every library still works alone, so nothing throws and no test goes red; a guardrail decision
+        simply never reaches the code waiting for it. This is the single most common cause of a
+        "cooperation stopped working" report, and it is usually one stale `@cendor/*` pin left behind
+        after upgrading the rest. All `@cendor/*` libraries share one major (currently **3**) — upgrade
+        the whole set together. Consumer repos of ours run a `check:one-core` gate for exactly this.
+      render: shell
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest script or steps that show it. An **offline** repro (no key, no network — a provider-shaped stub object, as this repo's own suite and the cookbook recipes use) is the fastest for us to act on.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output
+      description: Paste the stack trace, the failing assertion, or the printed numbers.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you file
+      options:
+        - label: I am on the latest released version of that package, or I have said above which version I am on and why.
+        - label: I checked the [parity matrix](https://cendor.ai/docs/languages) — this is not a documented Python/TypeScript gap.
+        - label: I ran `pnpm why @cendor/core` (or `npm ls @cendor/core`) and there is exactly **one** `@cendor/core` in my tree — or I pasted the output showing otherwise.
+        - label: This is not a security vulnerability (those go through private reporting, linked above).
+        - label: If numbers are involved (cost, tokens, budget), I have included the exact values — money is `decimal.js` here, never a `number`.

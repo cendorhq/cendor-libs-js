@@ -1,0 +1,23 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability (private report)
+    url: https://github.com/cendorhq/cendor-libs-js/security/advisories/new
+    about: Never a public issue — report privately via GitHub Private Vulnerability Reporting. See SECURITY.md.
+  - name: Documentation — one page per library
+    url: https://cendor.ai/docs
+    about: A question, a "how do I …", or an unclear page — start with the docs. The TypeScript tab on every code block is the shape to copy.
+  - name: Python vs TypeScript — the parity matrix
+    url: https://cendor.ai/docs/languages
+    about: Read this BEFORE filing a "Python does X and TypeScript does not" bug. The matrix is the contract between the two languages; a listed gap is documented, not a defect.
+  - name: Correct call shapes (and the common wrong ones)
+    url: https://cendor.ai/docs/for-ai-assistants
+    about: The maintained trap registry and canonical examples — including the duplicate-@cendor/core trap. Check here before filing a bug about an API that "does not exist".
+  - name: Python reference implementation (cendor-* on PyPI)
+    url: https://github.com/cendorhq/cendor-libs/issues
+    about: This repo is the TypeScript port. File Python bugs and requests on cendor-libs.
+  - name: Agent loop, handoff, tool schemas (@cendor/sdk on npm)
+    url: https://github.com/cendorhq/cendor-sdk-js/issues
+    about: Orchestration is not in these libraries. If your report is about running an agent rather than governing a single call, file it on cendor-sdk-js.
+  - name: Cookbook — copy-paste recipes
+    url: https://cendor.ai/cookbook
+    about: Every recipe runs offline with no API key. The quickest way to get a working repro to attach to a bug report.

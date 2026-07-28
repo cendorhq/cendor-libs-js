@@ -1,0 +1,79 @@
+name: Feature request
+description: Suggest an idea or improvement for one of the @cendor/* TypeScript libraries.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The libraries are deliberately small and composable — they sit *beneath* agent frameworks and
+        cooperate only through `@cendor/core`'s event bus / interceptor seams. Two shapes of request
+        are especially welcome and are worth naming separately:
+
+        - **Close a parity gap.** If a capability exists in the Python
+          [`cendor-*`](https://github.com/cendorhq/cendor-libs) packages and not here, say which row of
+          the [parity matrix](https://cendor.ai/docs/languages) you want closed — that is the clearest
+          possible request.
+        - **A new `instrument()` target.** A provider client shape we do not yet duck-type. Include the
+          client's method path and the response's usage fields; no provider SDK is or will become a
+          dependency here.
+
+        The checkboxes at the bottom are the shape constraints most proposals run into.
+  - type: dropdown
+    id: package
+    attributes:
+      label: Which package?
+      options:
+        - "@cendor/core"
+        - "@cendor/tokenguard"
+        - "@cendor/contextkit"
+        - "@cendor/squeeze"
+        - "@cendor/guardrails"
+        - "@cendor/cassette"
+        - "@cendor/acttrace"
+        - A new library
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of request is this?
+      options:
+        - Close a documented Python/TypeScript parity gap
+        - A new `instrument()` provider/client shape
+        - A new capability that does not exist in either language
+        - A runtime-breadth concern (browser / edge / Deno / Bun / workerd)
+        - Types only (a wrong or too-wide public type, a missing `@example`)
+        - Docs / the parity matrix
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the use case first — the underneath-the-call concern you are hitting in your own app.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would the API or behavior look like? Keep it small and composable — a full TypeScript signature is ideal, plus the one-line correct call shape a user would copy.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including "I did it in my own app like this" — that is useful signal.
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Fit with how these libraries are built
+      description: If one of these does not hold, say so in the proposal — it may still be the right idea, just in a different place.
+      options:
+        - label: This stays local-first — no required account, network, or running server, and any provider SDK stays an optional peer.
+        - label: This does not make one library import another (they cooperate through `@cendor/core`'s bus / interceptor / protocol seams; `@cendor/core` is the only in-workspace dependency a package may take).
+        - label: This is not agent orchestration (a loop, handoff/supervisor, tool-schema generation, provider response normalization) — that belongs to [cendor-sdk-js](https://github.com/cendorhq/cendor-sdk-js).
+        - label: It can be tested offline — no API key, no network, no Python (the cross-language conformance vectors in `fixtures/` are committed for exactly this reason).
+        - label: Where a package documents runtime breadth, this keeps Node built-ins (`node:*`) behind an optional subpath or a feature check rather than making them unconditional.
+        - label: Any number this would let me claim is reproducible from the tests or the benchmark suite.
