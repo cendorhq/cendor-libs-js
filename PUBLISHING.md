@@ -71,6 +71,6 @@ on `@cendor/libs`), never an empty placeholder (npm anti-squatting policy).
 ## Notes
 
 - `packageManager` is pinned (`pnpm@9.14.2`); CI uses `--frozen-lockfile`.
-- Tests need **no** Python and **no** network — 790+ tests (796 cases across 59 files), including
-  the cross-language conformance vectors under [`fixtures/`](fixtures).
+- Tests need **no** Python and **no** network — 899 tests across 72 files (measured 2026-07-28),
+  including the cross-language conformance vectors under [`fixtures/`](fixtures).
 - Versions are independent from the Python packages (parity is documented, never version-coupled).
