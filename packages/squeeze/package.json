@@ -1,6 +1,6 @@
 {
   "name": "@cendor/squeeze",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Shrink long prompts to hit a token budget and expand them back exactly — the same input always produces the same output.",
   "type": "module",
   "license": "Apache-2.0",

@@ -1,5 +1,11 @@
 # @cendor/squeeze
 
+## 3.0.1
+
+### Patch Changes
+
+- 3c6a8dc: Throwaway changeset: verifies the version-PR release flow opens a PR and publishes nothing. Reverted immediately; not intended to ship.
+
 ## 3.0.0
 
 ### Major Changes
@@ -14,7 +20,7 @@
   `npm i @cendor/libs@latest`.
 
   These libraries cooperate through a single in-process event bus in `@cendor/core`. If two of them
-  resolve *different* copies of core, that is two buses and cooperation stops silently — a guardrail
+  resolve _different_ copies of core, that is two buses and cooperation stops silently — a guardrail
   decision never reaches the code listening for it, with nothing failing to say so. A shared major
   makes an incoherent set obvious at a glance rather than at runtime, and a caret spanning the whole
   major keeps the resolver on one copy.
