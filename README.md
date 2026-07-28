@@ -400,7 +400,7 @@ Knowing exactly where the edges are is part of the design:
 Full documentation is the shared, searchable site at [cendor.ai/docs](https://cendor.ai/docs) — with a
 page-wide **Python / TypeScript** toggle:
 
-- **Libraries** — [core](https://cendor.ai/docs/core) · [contextkit](https://cendor.ai/docs/contextkit) · [squeeze](https://cendor.ai/docs/squeeze) · [tokenguard](https://cendor.ai/docs/tokenguard) · [cassette](https://cendor.ai/docs/cassette) · [acttrace](https://cendor.ai/docs/acttrace)
+- **Libraries** — [core](https://cendor.ai/docs/core) · [contextkit](https://cendor.ai/docs/contextkit) · [squeeze](https://cendor.ai/docs/squeeze) · [tokenguard](https://cendor.ai/docs/tokenguard) · [guardrails](https://cendor.ai/docs/guardrails) · [cassette](https://cendor.ai/docs/cassette) · [acttrace](https://cendor.ai/docs/acttrace)
 - [Getting Started](https://cendor.ai/docs/getting-started) · [Architecture](https://cendor.ai/docs/architecture) · [Providers](https://cendor.ai/docs/providers) · [Benchmarks](https://cendor.ai/docs/benchmarks) · [FAQ](https://cendor.ai/docs/faq)
 - [Parity matrix](https://cendor.ai/docs/languages) — what's ported, what's Python-only (also [`docs/parity.md`](docs/parity.md))
 
