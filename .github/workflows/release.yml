@@ -103,6 +103,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          # Provenance requires a PUBLIC source repo (sigstore rejects private with E422).
-          # These repos are private, so provenance is off; re-enable ("true") once public.
-          NPM_CONFIG_PROVENANCE: "false"
+          # npm provenance: signed, publicly verifiable attestation linking each tarball to the
+          # commit + workflow that built it. Requires a PUBLIC source repo — sigstore rejects a
+          # private one with E422, which is the only reason this was "false" until the 2026-07-29
+          # flip. Needs `id-token: write` on this job (declared above).
+          NPM_CONFIG_PROVENANCE: "true"
