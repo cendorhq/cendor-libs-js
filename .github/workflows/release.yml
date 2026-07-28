@@ -51,7 +51,8 @@ jobs:
     needs: verify # nothing reaches npm unless every `verify` matrix leg is green
     runs-on: ubuntu-latest
     permissions:
-      contents: write # commit the version bump + push tags back to main
+      contents: write # push the version-bump branch + tags
+      pull-requests: write # open / update the "Version Packages" PR
       id-token: write # npm provenance via OIDC
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,20 +67,35 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
-      # Direct publish on push (no Version PR), mirroring the Python release flow: when changesets are
-      # present, `changeset version` bumps versions + writes CHANGELOGs, we commit that back to main
-      # ([skip ci] so it doesn't re-trigger), then `changeset publish` publishes the bumped @cendor/*
-      # packages to npm (pnpm replaces workspace:^ with real ranges) with provenance and tags each
-      # `@cendor/<x>@<version>`. A run with no changesets versions nothing and publishes nothing.
-      - name: Version + publish
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          pnpm exec changeset version
-          git add -A
-          git commit -m "chore: version packages [skip ci]" || echo "no version changes to commit"
-          pnpm exec changeset publish
-          git push --follow-tags origin HEAD:main || echo "nothing to push"
+      # TWO-STEP RELEASE (the changesets "Version Packages" PR flow). This replaced direct
+      # publish-on-push on 2026-07-29 (FLIP-CHECKLIST A4), because on a public repo an accidental push
+      # to `main` carrying a changeset WAS a release — no human step between a merge and npm.
+      #
+      # The action branches on whether changesets are present, so one workflow covers both halves:
+      #   1. changesets present  → open/update PR "chore: version packages" on branch
+      #                            `changeset-release/main`, which runs `changeset version` there
+      #                            (bumping versions + writing CHANGELOGs). NOTHING is published.
+      #   2. no changesets, versions already bumped (i.e. that PR was merged)
+      #                          → run `changeset publish`: publish the bumped @cendor/* to npm
+      #                            (pnpm rewrites workspace:^ into real ranges) and tag each
+      #                            `@cendor/<x>@<version>`.
+      # So PUBLISHING IS NOW A MERGE, not a push — and `needs: verify` still gates both halves.
+      #
+      # `pnpm install --lockfile-only` after versioning is currently a NO-OP and is deliberate
+      # insurance: internal ranges are `workspace:^`, so a version bump does not touch
+      # pnpm-lock.yaml (measured). If an internal range is ever pinned instead, the bump WOULD stale
+      # the lockfile and the Version PR's own `--frozen-lockfile` install would fail. Keep it.
+      #
+      # createGithubReleases is off to preserve existing behaviour — today the npm side ships tags but
+      # no GitHub Releases. Turning it on is a reasonable follow-up, not part of this change.
+      - name: Version PR, or publish a merged one
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        with:
+          version: pnpm exec changeset version && pnpm install --lockfile-only
+          publish: pnpm exec changeset publish
+          commit: "chore: version packages"
+          title: "chore: version packages"
+          createGithubReleases: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

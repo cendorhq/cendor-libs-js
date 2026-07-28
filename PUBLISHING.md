@@ -1,27 +1,39 @@
 # Publishing `@cendor/*`
 
 The `@cendor/*` packages are **published on npm**. Releases are automated by
-[`.github/workflows/release.yml`](.github/workflows/release.yml) — a **direct publish-on-push**
-flow (no "Version Packages" PR), mirroring the Python release flow.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) — the changesets
+**"Version Packages" PR** flow, so **publishing is a merge, not a push**.
 
 ## How a release happens
 
 1. Land your change together with a **changeset**: `pnpm changeset` (pick the affected packages +
    bump type), commit the generated `.changeset/*.md`.
-2. Push (or merge) to `main`. `release.yml` runs on every push to `main` in **two** jobs — a `verify`
-   gate, then `release`, which declares `needs: verify`:
+2. Push (or merge) to `main`. `release.yml` runs in **two** jobs — a `verify` gate, then `release`,
+   which declares `needs: verify`:
    - **`verify`** re-runs the full CI gate — `pnpm install --frozen-lockfile`, `pnpm build`
      (typecheck), `pnpm check:types`, `pnpm lint`, `pnpm check:major`, `pnpm test` — on the same
      **Node 20 + 22** matrix as [`ci.yml`](.github/workflows/ci.yml). Every matrix leg must be green.
-   - **`release`** then does the publish work:
-     - `pnpm install --frozen-lockfile` + `pnpm build`;
-     - `changeset version` — applies pending changesets: bumps versions and writes CHANGELOGs;
-     - commits that back to `main` as `chore: version packages [skip ci]` (the `[skip ci]` marker
-       stops it re-triggering);
-     - `changeset publish` — publishes the bumped `@cendor/*` packages to npm (pnpm rewrites
-       `workspace:^` ranges to real version ranges at pack time) and tags each `@cendor/<x>@<version>`;
-     - `git push --follow-tags`.
-3. A push with **no** pending changesets versions nothing and publishes nothing — it's a no-op.
+   - **`release`** then runs `changesets/action`, which branches on whether changesets are pending:
+     - **changesets present** → it opens or updates a PR titled **`chore: version packages`** on the
+       branch `changeset-release/main`. That PR runs `changeset version`, so it carries the version
+       bumps and the CHANGELOG entries. **Nothing is published yet** — this is the review step.
+     - **no changesets, versions already bumped** (you merged that PR) → it runs `changeset publish`,
+       which publishes the bumped `@cendor/*` to npm (pnpm rewrites `workspace:^` into real ranges)
+       and tags each `@cendor/<x>@<version>`.
+3. **Review the version PR, then merge it. The merge is the release.**
+4. A push with no changesets and no pending bumps versions nothing and publishes nothing — a no-op.
+
+> **Why the PR step exists (changed 2026-07-29).** This was a direct publish-on-push flow: a single
+> push to `main` carrying a changeset went straight to npm, with no human step between the merge and
+> the registry. That is tolerable on a private repo with an audience of one; in public an accidental
+> push is a release, and a release is irreversible. The version PR is the human step. FLIP-CHECKLIST
+> A4.
+>
+> Two operational notes. The flow needs the org setting *Allow GitHub Actions to create and approve
+> pull requests* — without it the action cannot open the PR and the release stalls with a permissions
+> error (enabled org-wide 2026-07-29; the repo-level toggle 409s while the org forbids it). And
+> `createGithubReleases` is deliberately **off**, preserving today's behaviour of tags-without-GitHub-
+> Releases; turning it on is a reasonable follow-up.
 
 Publish this repo's libs **before** `@cendor/sdk` (the SDK depends on them). Versions are
 independent from the Python packages — parity is documented, never version-coupled.
