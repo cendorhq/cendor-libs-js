@@ -5,22 +5,51 @@
   </picture>
 </p>
 
-**Production plumbing for LLM applications.**
+<!-- The header block is centred as one unit, to line up with the banner above. That means HTML, not
+     markdown: GitHub does not process markdown inside an HTML block, so `**bold**` and `[a](b)` would
+     render literally inside a <p align="center">. Verified against the GitHub markdown API. -->
 
-Composable TypeScript primitives for context, cost, testing, and governance — the layer beneath your LLM app. The TypeScript/JavaScript port of the [Cendor libraries](https://github.com/cendorhq/cendor-libs).
+<p align="center">
+  <strong>Production plumbing for LLM applications.</strong>
+</p>
 
-[![npm: @cendor/libs](https://img.shields.io/npm/v/@cendor/libs.svg?label=%40cendor%2Flibs)](https://www.npmjs.com/package/@cendor/libs) ![Node](https://img.shields.io/badge/node-%E2%89%A520-blue) ![License](https://img.shields.io/badge/license-Apache_2.0-blue) ![module: ESM](https://img.shields.io/badge/module-ESM-blue) ![types: TypeScript](https://img.shields.io/badge/types-TypeScript-blue) [![Biome](https://img.shields.io/badge/lint-biome-60a5fa)](https://biomejs.dev)
+<p align="center">
+  Composable TypeScript primitives for context, cost, testing, and governance — the layer beneath your
+  LLM app. The TypeScript/JavaScript port of the
+  <a href="https://github.com/cendorhq/cendor-libs">Cendor libraries</a>.
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@cendor/libs"><img alt="npm: @cendor/libs" src="https://img.shields.io/npm/v/@cendor/libs.svg?label=%40cendor%2Flibs"></a>
+  <img alt="Node" src="https://img.shields.io/badge/node-%E2%89%A520-blue">
+  <img alt="License" src="https://img.shields.io/badge/license-Apache_2.0-blue">
+  <img alt="module: ESM" src="https://img.shields.io/badge/module-ESM-blue">
+  <img alt="types: TypeScript" src="https://img.shields.io/badge/types-TypeScript-blue">
+  <a href="https://biomejs.dev"><img alt="Biome" src="https://img.shields.io/badge/lint-biome-60a5fa"></a>
+</p>
 
 <!-- cendor:downloads:start — self-hosted badges from cendor.ai (no third party in the render path).
      The numbers live inside the SVGs, regenerated daily from the committed ledger, so this file
      never goes stale. PyPI excludes index mirrors; npm publishes no mirror filter, which is why the
      two are shown separately and never summed. Method: https://cendor.ai/downloads -->
-[![npm · @cendor/*](https://cendor.ai/badge/downloads/cendor-libs-js.svg)](https://cendor.ai/downloads) [![all Cendor · npm](https://cendor.ai/badge/downloads/npm.svg)](https://cendor.ai/downloads) [![all Cendor · PyPI](https://cendor.ai/badge/downloads/pypi.svg)](https://cendor.ai/downloads)
+<p align="center">
+  <a href="https://cendor.ai/downloads"><img alt="npm · @cendor/*" src="https://cendor.ai/badge/downloads/cendor-libs-js.svg"></a>
+  <a href="https://cendor.ai/downloads"><img alt="all Cendor · npm" src="https://cendor.ai/badge/downloads/npm.svg"></a>
+  <a href="https://cendor.ai/downloads"><img alt="all Cendor · PyPI" src="https://cendor.ai/badge/downloads/pypi.svg"></a>
+</p>
 <!-- cendor:downloads:end -->
 
-[**Install**](#install) · [**The libraries**](#the-libraries-in-depth) · [**See it compose**](#see-it-all-compose) · [**Docs**](https://cendor.ai/docs) · [**Parity matrix**](https://cendor.ai/docs/languages)
+<p align="center">
+  <a href="#install"><strong>Install</strong></a> ·
+  <a href="#the-libraries-in-depth"><strong>The libraries</strong></a> ·
+  <a href="#see-it-all-compose"><strong>See it compose</strong></a> ·
+  <a href="https://cendor.ai/docs"><strong>Docs</strong></a> ·
+  <a href="https://cendor.ai/docs/languages"><strong>Parity matrix</strong></a>
+</p>
 
-*framework-agnostic · ESM-only · local-first · offline by default*
+<p align="center">
+  <em>framework-agnostic · ESM-only · local-first · offline by default</em>
+</p>
 
 > These are the `@cendor/*` npm packages — **one implementation** of the cross-language
 > [format specs](https://github.com/cendorhq/cendor-libs/tree/main/docs/specs). A cassette recorded
