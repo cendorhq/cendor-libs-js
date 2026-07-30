@@ -817,8 +817,24 @@ function enforce(frame: Frame, call: LLMCall): void {
   if (mode === 'truncate') throw new Truncated();
   if (mode === 'downgrade' || mode === 'clamp') return; // already handled pre-flight
   if (mode === 'break' && call.metadata[TG_BROKEN_KEY]) return; // breaker already raised — one raise
-  let reason = `budget exceeded: spent $${frame.spentUsd} > cap $${frame.capUsd} after ${frame.calls} call(s); last model=${call.model}. `;
-  if (mode === 'break') {
+  // Report the cap the caller actually SET. This used to be hardcoded in dollars, so a
+  // `withBudget({ tokens })` breach read "spent $0.0140800 > cap $null" — a token cap rendered as
+  // money, with a literal `cap $null` where the number should be. Both caps are reported when both
+  // were set and both breached, so a two-dimension budget is never silently reduced to one.
+  const breaches: string[] = [];
+  if (frame.capUsd !== null && frame.spentUsd.greaterThan(frame.capUsd))
+    breaches.push(`spent $${frame.spentUsd} > cap $${frame.capUsd}`);
+  if (frame.capTokens !== null && frame.spentTokens > frame.capTokens)
+    breaches.push(`used ${frame.spentTokens} tokens > cap ${frame.capTokens} tokens`);
+  if (breaches.length === 0) breaches.push(`spent $${frame.spentUsd} > cap $${frame.capUsd}`);
+  let reason = `budget exceeded: ${breaches.join(' and ')} after ${frame.calls} call(s); last model=${call.model}. `;
+  if (mode === 'block') {
+    // `block` IS pre-flight — reaching the post-flight check means the ESTIMATE fitted and the
+    // settled usage did not. Telling this caller to "use on_exceed='block'" (which the previous
+    // message did) is advice they have already taken.
+    reason +=
+      "on_exceed='block' refused nothing here: the pre-flight estimate fitted the cap and the call's settled usage did not, so the cumulative post-flight check raised. Reserve more output (outputReserve/reasoningReserve) or use onExceed:'clamp' to cap the call server-side.";
+  } else if (mode === 'break') {
     reason +=
       "on_exceed='break' cuts runaway streams mid-flight, but a call can still cross the cumulative cap post-flight — use on_exceed='block' for a pre-flight hard cap.";
   } else {

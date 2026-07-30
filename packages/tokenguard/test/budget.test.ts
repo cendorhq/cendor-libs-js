@@ -249,4 +249,74 @@ describe('budget', () => {
       expect(caught).toBeInstanceOf(BudgetExceeded);
     });
   });
+  // ── the post-flight message names the cap the caller actually set ─────────────────────────────
+  //
+  // Found 2026-07-30 driving a real Bedrock Converse call through the cendor-cookbook recipe: a
+  // TOKEN budget whose pre-flight estimate fitted but whose settled usage did not raised
+  //   "budget exceeded: spent $0.0140800 > cap $null … use on_exceed='block' …"
+  // Three defects in one string: a token cap rendered as money, a literal `cap $null` where the
+  // number belongs, and advice to use the option the caller had already passed. Enforcement was
+  // always correct — only the sentence was wrong.
+
+  async function messageFor(
+    cfg: Record<string, unknown>,
+    usage: Record<string, unknown>,
+  ): Promise<string> {
+    const client = makeClient({ usage });
+    try {
+      await withBudget(cfg as never, async () => {
+        await callN(client, { n: 1 });
+      });
+    } catch (e) {
+      if (!(e instanceof BudgetExceeded)) throw e;
+      return String(e.message);
+    }
+    throw new Error('expected BudgetExceeded');
+  }
+
+  it('a token-cap breach is reported in tokens, never as `cap $null`', async () => {
+    const msg = await messageFor(
+      { tokens: 1000, onExceed: 'block' },
+      { prompt_tokens: 8, completion_tokens: 1400 }, // small estimate, large settled usage
+    );
+    expect(msg).toContain('used 1408 tokens > cap 1000 tokens');
+    expect(msg).not.toContain('cap $null');
+    expect(msg.split('after')[0]).not.toContain('$');
+  });
+
+  it('a USD-cap breach is still reported in USD', async () => {
+    const msg = await messageFor(
+      { usd: 0.001, onExceed: 'raise' },
+      { prompt_tokens: 1000, completion_tokens: 500 },
+    );
+    expect(msg).toContain('cap $0.001');
+    expect(msg).not.toContain('tokens > cap');
+  });
+
+  it('both caps breached reports both', async () => {
+    const msg = await messageFor(
+      { usd: 0.001, tokens: 100, onExceed: 'raise' },
+      { prompt_tokens: 1000, completion_tokens: 500 },
+    );
+    expect(msg).toContain('cap $0.001');
+    expect(msg).toContain('used 1500 tokens > cap 100 tokens');
+    expect(msg).toContain(' and ');
+  });
+
+  it('a `block` caller is not told to use `block`', async () => {
+    const msg = await messageFor(
+      { tokens: 1000, onExceed: 'block' },
+      { prompt_tokens: 8, completion_tokens: 1400 },
+    );
+    expect(msg).not.toContain("use on_exceed='block'");
+    expect(msg).toContain('the pre-flight estimate fitted the cap');
+  });
+
+  it('`raise` keeps its own advice', async () => {
+    const msg = await messageFor(
+      { usd: 0.001, onExceed: 'raise' },
+      { prompt_tokens: 1000, completion_tokens: 500 },
+    );
+    expect(msg).toContain("on_exceed='raise' is post-flight");
+  });
 });
