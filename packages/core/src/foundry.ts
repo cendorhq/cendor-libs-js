@@ -1,7 +1,8 @@
 /**
- * Optional Azure AI Foundry Agents correlation adapter — sourcing the agent + conversation id.
+ * Optional Microsoft Foundry Agent Service correlation adapter — sourcing agent + conversation id.
  *
- * Azure AI Foundry Agents runs a model **server-side**: your app calls
+ * The Microsoft Foundry (formerly Azure AI Foundry) Agent Service runs a model **server-side**:
+ * your app calls
  * `client.runs.create(threadId, agentId, …)` (or `createAndPoll` / `createThreadAndRun`) and the run
  * executes on Azure. The wire calls `instrument()` wraps (chat/responses/embeddings/converse) never
  * see that run, so there is **no per-step token/cost to capture here** — this is a *correlation*
@@ -119,7 +120,7 @@ export function observeFoundryAgents<C extends FoundryClient>(client: C): C {
   const runs = client.runs;
   if (!runs) {
     throw new TypeError(
-      'observeFoundryAgents expects an Azure AI Foundry AgentsClient (with a `.runs` operations ' +
+      'observeFoundryAgents expects a Microsoft Foundry AgentsClient (with a `.runs` operations ' +
         'group). Use foundryAgentScope(agentId, threadId, fn) to scope a block manually instead.',
     );
   }

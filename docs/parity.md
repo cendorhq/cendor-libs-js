@@ -37,7 +37,7 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 | `Usage` / `LLMCall` / `ToolCall` | ✅ | ✅ | field names snake_case ↔ camelCase; type names identical |
 | Event bus | ✅ | ✅ | subscribe/emit/unsubscribe; error isolation + re-raise first |
 | Price table + `estimate()` | ✅ | ✅ | decimal-exact; same bundled snapshot; `refresh()` async in TS |
-| `prices.register()` | ✅ | ✅ | **Public in both since `cendor-core` 1.15.0.** Python also has `prices.register_model_price(model, input=…, output=…, per="1M")` — the per-1M convenience; TS's per-1M twin is `registerModelPrice` in `@cendor/sdk`. `cendor.sdk.register_model_price` is now a thin re-export, so a **libraries-door** user needs only core to price a deployment. Registrations **survive `refresh()`** in both |
+| `prices.register()` | ✅ | ✅ | **Public in both since `cendor-core` 1.15.0.** Python also has `prices.register_model_price(model, input=…, output=…, per="1M")` — the per-1M convenience — and `@cendor/core` 3.4.0 adds `prices.registerModelPrice(model, { input, output })`, the last pricing asymmetry between the two cores. Before 3.4.0 the TS per-1M form existed only in `@cendor/sdk`, so a libraries-door TS app following the providers page imported it from core and got nothing; that export still works. `cendor.sdk.register_model_price` is likewise a thin re-export. So a **libraries-door** user in either language needs only core to price a deployment. Registrations **survive `refresh()`** in both |
 | `prices.refresh(source: 'azure')` | ✅ (≥ 1.15.0) | ✅ | The Azure Retail Prices source had **never** worked in Python — its URL carried raw spaces in the `$filter` and `urllib` refuses those, which `refresh()`'s never-raise contract turned into a silent `false`. TS was unaffected (`fetch` encodes). Encoded, it maps 95 models |
 | Token counting | ✅ | ✅ | `tiktoken` ↔ `js-tiktoken` — exact counts match |
 | `instrument()` providers | ✅ 6 (OpenAI, Anthropic, HuggingFace, google-genai, Bedrock, Ollama) | ✅ 6 (OpenAI, Anthropic, HuggingFace, google-genai, Bedrock, Ollama) | Bedrock JS auto-detects a boto-shaped `converse()` **and, since `@cendor/core` 3.3.0, an aws-sdk-v3 `BedrockRuntimeClient`'s `send(new ConverseCommand(…))`** — no SDK or shim needed |
@@ -103,7 +103,7 @@ Legend: ✅ ported · 🚧 partial/scoped · — not applicable · **Py-only** d
 ## SDK (`cendor-sdk` ↔ `cendor-sdk-js`)
 
 See the [SDK parity page](https://github.com/cendorhq/cendor-sdk-js) — Agent loop, all ten provider
-paths (OpenAI, Anthropic, HuggingFace, Azure AI Foundry chat + responses, Foundry Local, Ollama, Gemini,
+paths (OpenAI, Anthropic, HuggingFace, Microsoft Foundry chat + responses, Foundry Local, Ollama, Gemini,
 Bedrock), zod tool schemas, sessions (better-sqlite3 + memory adapters), handoff/supervisor/sequential/
 parallel, structured outputs, incremental single- + multi-agent streaming, the v1.1 surface (progress
 hooks, prompt caching, live OTel spans), plus MCP tool loading, checkpoint/resume, A2A server/client,

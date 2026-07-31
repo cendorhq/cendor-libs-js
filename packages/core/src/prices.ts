@@ -129,10 +129,11 @@ export interface RegisterRates {
 /**
  * Register (or overwrite) a model's **per-token** rates in the active price table, so a model absent
  * from the bundled snapshot (a custom/deployment/Hub id) is costed and USD budgets bind on it.
- * Rates are exact `Decimal`. The higher-level `@cendor/sdk` `registerModelPrice` handles per-1M/1K
- * unit conversion before calling this. Registrations **survive `refresh()`** (re-applied after
- * every table swap, overriding a snapshot entry with the same id); dropped by {@link _reset}.
- * (Python reached parity in `cendor-core` 1.15.0: `prices.register(model, rates)` per-token, plus
+ * Rates are exact `Decimal`. {@link registerModelPrice} is the higher-level form that takes the
+ * **per-1M** numbers a published rate card quotes and does the unit conversion before calling this.
+ * Registrations **survive `refresh()`** (re-applied after every table swap, overriding a snapshot
+ * entry with the same id); dropped by {@link _reset}.
+ * (Python parity: `prices.register(model, rates)` per-token since `cendor-core` 1.15.0, plus
  * `prices.register_model_price(model, input=…, output=…, per="1M")` for the per-1M form.)
  *
  * @example
@@ -157,6 +158,69 @@ export function register(model: string, rates: RegisterRates): void {
   t.models[model] = r;
 }
 
+/** The unit a {@link RegisterModelPriceOptions} rate is quoted in. */
+export type PriceUnit = '1M' | '1K' | 'token';
+
+const PER: Record<string, number> = { '1M': 1_000_000, '1K': 1_000, token: 1 };
+
+/** Options for {@link registerModelPrice}. Rates default to **USD per 1M tokens**. */
+export interface RegisterModelPriceOptions {
+  /** Input (prompt) price, in units of `per`. */
+  input: number | string;
+  /** Output (completion) price. Defaults to `0`. */
+  output?: number | string;
+  /** Optional cache-read price. Omitted means the input rate is used for cached tokens. */
+  cached?: number | string;
+  /** Optional cache-write price (Anthropic-style). */
+  cacheWrite?: number | string;
+  /** Unit the prices are expressed in — `'1M'` (default), `'1K'`, or `'token'`. */
+  per?: PriceUnit;
+}
+
+/**
+ * Register a model's rates quoted **per 1M tokens** — the unit every published price list uses.
+ *
+ * The unit-converting convenience over {@link register}: rates are divided by `per` and stored as
+ * exact per-token `Decimal`, so `LLMCall.cost` is non-zero for the model and USD budgets enforce
+ * against it. Registrations **survive `refresh()`**.
+ *
+ * Use this when you hold the actual rate card — a fine-tune, a negotiated rate, or a Microsoft
+ * Foundry deployment serving a model the snapshot has no row for (DeepSeek, Mistral, Phi, …). When
+ * the deployment serves a model that *is* in the table, {@link registerDeployment} is less typing
+ * and less to get wrong.
+ *
+ * `@cendor/sdk`'s `registerModelPrice` is the same helper; since `@cendor/core` 3.4.0 it lives here
+ * too, so a **libraries-door** app needs only `@cendor/core` — matching Python, where
+ * `prices.register_model_price` has been in `cendor-core` since 1.15.0.
+ *
+ * @throws `Error` if `per` is not one of `'1M'` / `'1K'` / `'token'`.
+ * @returns The stored **per-token** rates.
+ *
+ * @example
+ * ```ts
+ * import { prices } from '@cendor/core';
+ * prices.registerModelPrice('my-deployment', { input: 2.5, output: 10 }); // USD per 1M tokens
+ * prices.estimate('my-deployment', 1000, { outputTokens: 500 });          // -> Money
+ * ```
+ */
+export function registerModelPrice(model: string, opts: RegisterModelPriceOptions): Rates {
+  const per = opts.per ?? '1M';
+  const divisor = PER[per];
+  if (divisor === undefined)
+    throw new Error(`per must be one of 1K, 1M, token, got ${JSON.stringify(per)}`);
+  const d = (v: number | string) => new Dec(String(v)).dividedBy(divisor);
+  // Declared shape, not `Rates`: `register` requires an `input` rate, and an index-signature type
+  // cannot promise one — the compiler is right to refuse it.
+  const rates: { input: Decimal; output: Decimal; cached?: Decimal; cache_write?: Decimal } = {
+    input: d(opts.input),
+    output: d(opts.output ?? 0),
+  };
+  if (opts.cached != null) rates.cached = d(opts.cached);
+  if (opts.cacheWrite != null) rates.cache_write = d(opts.cacheWrite);
+  register(model, rates);
+  return { ...rates };
+}
+
 /** Options for {@link registerDeployment}. */
 export interface RegisterDeploymentOptions {
   /** A model id already in the price table whose rates the deployment should use. */
@@ -166,7 +230,8 @@ export interface RegisterDeploymentOptions {
 /**
  * Price a **deployment name** by copying the rates of the base model it serves.
  *
- * On Azure and Azure AI Foundry the id a call reports is the *deployment* name you chose
+ * On Microsoft Foundry (formerly Azure AI Foundry) the id a call reports is the *deployment* name
+ * you chose
  * (`prod-gpt4o-eastus`), not a model id — so it is absent from every price table, its cost is `null`,
  * and a USD budget silently never binds. You already know which model it serves; this says so once.
  *

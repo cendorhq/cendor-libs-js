@@ -10,7 +10,7 @@
  *   → `gen_ai.agent.id` · `gen_ai.conversation.id`
  * * **OpenAI Assistants** — `assistant_id` and the thread id
  *   → `gen_ai.agent.id` · `gen_ai.conversation.id`
- * * **Azure AI Foundry Agent Service** — `agentId` / `threadId`; see `@cendor/core/foundry`
+ * * **Microsoft Foundry Agent Service** — `agentId` / `threadId`; see `@cendor/core/foundry`
  *
  * Each is an **adapter**, exactly like `@cendor/core/foundry` and `@cendor/core/openai-agents`: the
  * framework owns the identity, the adapter forwards it, and `@cendor/core` itself still carries no
