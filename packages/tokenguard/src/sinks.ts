@@ -9,9 +9,18 @@
  */
 import { createRequire } from 'node:module';
 import type { Sink } from '@cendor/core';
-import Database from 'better-sqlite3';
+// `better-sqlite3` is an OPTIONAL native dependency, so it must be loaded lazily and by TYPE only.
+// A value `import Database from 'better-sqlite3'` here is eager: it makes the whole
+// `@cendor/tokenguard/sinks` subpath unimportable whenever the optional install was skipped —
+// taking `QueueSink` and `OTelSink`, which need no SQLite at all, down with it. Measured
+// 2026-07-31 on `node:20-slim` (linux-x64), where better-sqlite3 12.x publishes no prebuilt
+// binary and node-gyp has no compiler: `npm install` succeeds (an optional dep that fails is
+// skipped) and the first `import … from '@cendor/tokenguard/sinks'` then throws
+// ERR_MODULE_NOT_FOUND. `@cendor/squeeze`'s store.ts already used this lazy pattern; this file
+// did not. See tokenguard/test/sinks-optional.test.ts.
+import type BetterSqlite3 from 'better-sqlite3';
 
-type DatabaseInstance = InstanceType<typeof Database>;
+type DatabaseInstance = InstanceType<typeof BetterSqlite3>;
 
 /** A spend row as delivered to a sink's `write`. */
 export interface SpendEntry {
@@ -52,6 +61,9 @@ export class SQLiteSink {
   private readonly db: DatabaseInstance;
 
   constructor(path: string) {
+    // Lazy, so importing this module never requires the optional native dependency.
+    const require = createRequire(import.meta.url);
+    const Database = require('better-sqlite3') as typeof BetterSqlite3;
     this.db = new Database(path);
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS spend (' +
