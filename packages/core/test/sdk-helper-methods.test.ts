@@ -333,3 +333,52 @@ it('a streamed call still hands back cendor’s counting stream, not the SDK’s
   expect(n).toBe(EVENTS.length);
   expect(events).toHaveLength(1); // counted, because `data` is our wrapper
 });
+
+// --- the Python/TypeScript asymmetry, pinned from this side ------------------------------------
+//
+// `messages.stream` and `messages.parse` are NOT instrument() targets here, and that is deliberate:
+// in anthropic-node both are helpers built on `create` (`stream` → `create({...,stream:true})
+// .withResponse()`, `parse` → `create(...).then(parseMessage)`), so the wrapped `create` already
+// captures them exactly once and a second target would double-count the same HTTP request.
+//
+// In **Python** the same two names POST their own request (`partial(self._post, "/v1/messages", …)`)
+// and therefore DO need their own targets — added in `cendor-core` 1.17.0, where they emitted zero
+// events before. Same trap shape as openai's `parse`, same codegen reason. Measured both ways in
+// `plan/evidence-gapclose-2026-07-31/s1_probe_anthropic_stream_{py.py,ts.mjs}`.
+//
+// These two tests are the regression pin for the TS half: if a future change made either helper emit
+// twice (or stop emitting), the asymmetry documented on /docs/for-ai-assistants would be wrong.
+it('the messages.stream() helper is counted exactly ONCE, not twice', async () => {
+  const c = instrument(anthropicClient());
+  await c.messages.stream({ model: 'claude-haiku-4-5' });
+  expect(events).toHaveLength(1); // a `stream` target here would make this 2
+});
+
+it('the messages.parse() helper rides the wrapped create and is counted exactly once', async () => {
+  // anthropic-node's parse is `this.create(params, options).then(parseMessage)` — a helper, not a
+  // separate request.
+  const inner = {
+    messages: {
+      create(_args: Record<string, unknown>): Promise<unknown> {
+        return Promise.resolve({
+          usage: { input_tokens: 8, output_tokens: 3 },
+          content: [{ type: 'text', text: '{"a":1}' }],
+        });
+      },
+      parse(args: Record<string, unknown>): Promise<unknown> {
+        return inner.messages
+          .create(args)
+          .then((m) => ({ ...(m as object), parsed_output: { a: 1 } }));
+      },
+    },
+  };
+  const c = instrument(inner);
+  const parsed = (await c.messages.parse({ model: 'claude-haiku-4-5' })) as {
+    parsed_output: unknown;
+  };
+  expect(parsed.parsed_output).toEqual({ a: 1 }); // the helper's own work survives
+  expect(events).toHaveLength(1);
+  expect((events[0] as LLMCall).usage).toStrictEqual(
+    new Usage({ inputTokens: 8, outputTokens: 3 }),
+  );
+});

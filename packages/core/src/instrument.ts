@@ -60,12 +60,44 @@ export function removeInterceptor(fn: Interceptor): void {
   if (i >= 0) interceptors.splice(i, 1);
 }
 
-function intercept(event: unknown): unknown {
+/**
+ * Run the interceptor chain for one outgoing call.
+ *
+ * **Ordering contract (`@cendor/core` 3.3.0).** Two things an interceptor can return end the chain
+ * differently, because they mean different things:
+ *
+ * - a **response** (`@cendor/cassette`'s replay) genuinely short-circuits: the provider is never
+ *   called, so there is nothing left for a later interceptor to rewrite. The chain stops.
+ * - a {@link Reroute} does **not**. The call still goes to the provider, so every remaining
+ *   interceptor is still consulted — against the **rerouted** call, so it sees the request as it will
+ *   actually be sent.
+ *
+ * Before 3.3.0 a `Reroute` also stopped the chain, and what you lost was silent and in the dangerous
+ * direction (measured — `plan/evidence-gapclose-2026-07-31/s6_probe_interceptor_chain.py`): with a
+ * tokenguard clamp registered before an `acttrace.guard()`, the clamp fired and the PII went to the
+ * provider **unredacted**; the other way round, the guard fired and the token cap **silently never
+ * bound**. Which one you lost depended on registration order, which a user cannot see.
+ *
+ * Reroutes compose in registration order and are applied as they arrive, so the second interceptor's
+ * view of `call.messages` / `call.model` is the first one's output; when two rewrite the same field,
+ * the later wins. `kwargs` is `undefined` on the tool path — a `ToolCall` has no provider request to
+ * rewrite, so a `Reroute` there keeps its old short-circuit meaning rather than being silently dropped.
+ */
+function intercept(event: unknown, kwargs?: Record<string, unknown>, provider = ''): unknown {
   const snapshot = [...interceptors];
   for (const fn of snapshot) {
     const result = fn(event);
-    if (result !== MISS) return result;
+    if (result === MISS) continue;
+    if (result instanceof Reroute) {
+      if (kwargs === undefined) return result; // tool path: no request to rewrite (see above)
+      applyReroute(event as LLMCall, kwargs, result, provider);
+      continue;
+    }
+    return result; // a recorded response — the provider is not called at all
   }
+  // Any reroutes are already applied to `kwargs`, so the caller simply makes the real call. Returning
+  // MISS (rather than a combined Reroute) keeps the wrapper single-pathed, and
+  // `call.metadata.rerouted` still records that it happened.
   return MISS;
 }
 
@@ -163,22 +195,33 @@ function findTargets(client: unknown): Target[] {
   if (messages && typeof messages.create === 'function') {
     return [[messages, 'create', 'anthropic']];
   }
-  // AWS Bedrock Converse. LIMITATION: aws-sdk v3 uses `client.send(new ConverseCommand(...))` — there
-  // is NO duck-typable `client.converse(...)`, and `send` is shared by every AWS command so it can't
-  // be cleanly duck-typed. This predicate matches boto-shaped / wrapper clients that DO expose
-  // `converse()`; first-class aws-sdk-v3 Bedrock support rides the SDK provider (Phase C), which wraps
-  // the client directly. The usage/request/stream bedrock branches below are implemented regardless so
-  // Phase C reuses them.
+  // AWS Bedrock Converse, boto-shaped: a client that exposes `converse()` directly (boto3 via a
+  // bridge, a hand-written shim, or `@cendor/sdk`'s synthetic wrapper).
   if (typeof c.converse === 'function') {
     const bedrock: Target[] = [[c, 'converse', 'bedrock']];
     // A boto-shaped client also exposes converse_stream: no `stream` flag, and the iterable arrives
     // as the `stream` member of the response object — an always-stream target. Mirrors the Python
-    // detection (instrument.py:290-292). aws-sdk-v3's send(ConverseStreamCommand) stays out of scope
-    // for the same reason converse itself is (no duck-typable method) — the SDK provider covers it.
+    // detection.
     if (typeof c.converse_stream === 'function') {
       bedrock.push([c, 'converse_stream', 'bedrock_stream']);
     }
     return bedrock;
+  }
+  // AWS Bedrock Converse, **aws-sdk-v3**: every call is `send(new ConverseCommand({...}))`. `send` is
+  // shared by every AWS command, so it cannot carry a provider tag on its own — the CLIENT is
+  // identified here and the COMMAND is identified per call (see {@link wrapAwsSend}). Until this
+  // existed, libs-only TypeScript Bedrock got **zero** capture: no budget, no guard, no audit, no
+  // cassette, measured at 0 LLMCalls, and cendor-testsuits recorded it every run as "the most
+  // surprising capture gap in the JS port".
+  //
+  // Identified by `config.serviceId === 'Bedrock Runtime'` — measured on
+  // @aws-sdk/client-bedrock-runtime 3.1100.0 to be a plain, synchronously-readable string (most of
+  // that config is async resolvers, this one is not), with the constructor name as a fallback. It is
+  // deliberately precise rather than "any smithy client": an S3 or DynamoDB client stays genuinely
+  // untouched, which is the documented `instrument()` contract, instead of being wrapped-but-
+  // pass-through.
+  if (typeof c.send === 'function' && isBedrockRuntimeClient(c)) {
+    return [[c, 'send', 'bedrock_send']];
   }
   // Legacy @google/generative-ai: `model.generateContent(...)` with the model id bound to the object
   // (read as modelDefault in instrument()).
@@ -210,6 +253,51 @@ function findTargets(client: unknown): Target[] {
   if (typeof c.chat === 'function') return [[c, 'chat', 'ollama']];
   return [];
 }
+
+/**
+ * Whether `c` is an aws-sdk-v3 **Bedrock Runtime** client (not S3, not DynamoDB).
+ *
+ * `config.serviceId` is the primary signal because it survives subclassing and bundler mangling;
+ * the constructor name is the fallback for a config that never resolved one.
+ */
+function isBedrockRuntimeClient(c: Record<string, unknown>): boolean {
+  if (get(c.config, 'serviceId') === 'Bedrock Runtime') return true;
+  return (c as { constructor?: { name?: string } }).constructor?.name === 'BedrockRuntimeClient';
+}
+
+/**
+ * aws-sdk-v3 command class name → the internal provider tag its request shape belongs to.
+ *
+ * Only the Converse family is captured. `InvokeModelCommand` is deliberately absent: its request and
+ * response bodies are opaque provider-specific JSON blobs (a different shape per model family), so
+ * there is nothing core could read as messages or usage without guessing — and a confidently wrong
+ * token count is worse than an honest gap. Everything not in this table passes through untouched.
+ */
+const AWS_COMMAND_PROVIDER: Record<string, string> = {
+  ConverseCommand: 'bedrock',
+  ConverseStreamCommand: 'bedrock_stream',
+};
+
+/**
+ * Depth of instrumented calls currently in their **synchronous** prologue.
+ *
+ * `@cendor/sdk`'s Bedrock provider wraps a v3 client in a synthetic `converse(input)` that calls
+ * `client.send(new ConverseCommand(input))`. Once core can capture `send` too, a client that is
+ * instrumented on *both* surfaces would emit two `LLMCall`s — and charge two budgets — for one HTTP
+ * request. The outer wrapper is the right accountant (it holds the provider's own call shape), so a
+ * nested `send` stands down.
+ *
+ * A plain counter is correct here, and safer than AsyncLocalStorage: `observe()` increments it,
+ * synchronously calls the real function, and decrements in a `finally` — with no `await` in between.
+ * JavaScript cannot interleave another task inside that window, so concurrent calls can never see
+ * each other's depth. (The org rail against `enterWith` is about *scoped* state that must survive an
+ * await; this deliberately must not.)
+ *
+ * **Honest limit:** it only spans the synchronous prologue. A wrapper that awaited something before
+ * reaching `send` would fall outside it and be counted twice; `@cendor/sdk`'s synthetic `converse` is
+ * a plain arrow that calls `send` directly, which is what makes this exact.
+ */
+let syncCallDepth = 0;
 
 const PUBLIC_PROVIDER: Record<string, string> = {
   openai_responses: 'openai',
@@ -251,6 +339,23 @@ const MESSAGES_KWARG: Record<string, string> = {
 };
 
 /**
+ * Per-provider kwarg carrying the **model**, so `Reroute({ model })` (tokenguard's
+ * `onExceed: 'downgrade'`) rewrites the field the provider actually reads. Everyone takes `model`
+ * except Bedrock's Converse API, which takes `modelId`.
+ *
+ * Measured 2026-07-31, and the reason this table exists: without it the rewrite landed on a generic
+ * `model` member Converse does not have, so the provider received the ORIGINAL (expensive) model
+ * while the `LLMCall` — and with it the budget ledger, the audit chain and every span — recorded the
+ * cheap one. The Python twin was worse: real boto3 validates its input members, so it raised
+ * `Unknown parameter in input: {'model'}` and never made the call. Either way
+ * `onExceed: 'downgrade'` did not downgrade on Bedrock, silently and in the expensive direction.
+ */
+const MODEL_KWARG: Record<string, string> = {
+  bedrock: 'modelId',
+  bedrock_stream: 'modelId',
+};
+
+/**
  * Wrap a provider client so each call emits an `LLMCall` on the bus. Detection is structural. Unknown
  * clients are returned untouched; wrapping is idempotent and returns the same client object.
  *
@@ -284,11 +389,10 @@ export function instrument<T>(client: T): T {
       const name = (get(c, 'model') ?? get(c, 'modelName') ?? get(c, '_modelName') ?? '') as string;
       modelDefault = String(name).replace(/^models\//, '');
     }
-    const wrapped = wrap(
-      fn.bind(owner) as (...args: unknown[]) => Promise<unknown>,
-      provider,
-      modelDefault,
-    );
+    const bound = fn.bind(owner) as (...args: unknown[]) => Promise<unknown>;
+    // `send` resolves its provider per call from the command class, so it gets its own wrapper.
+    const wrapped =
+      provider === 'bedrock_send' ? wrapAwsSend(bound) : wrap(bound, provider, modelDefault);
     // Patch in place when the property is a writable/configurable own or prototype slot. Some SDKs —
     // notably @huggingface/inference (InferenceClient defines every task method in its constructor via
     // `Object.defineProperty(this, name, { value })`, i.e. non-writable AND non-configurable own
@@ -352,18 +456,20 @@ function wrap(orig: (...args: unknown[]) => unknown, provider: string, modelDefa
     const { call, start } = pre(provider, kwargs, args, modelDefault);
     ensureStreamUsageOptions(provider, kwargs);
     const streaming = Boolean(kwargs.stream) || ALWAYS_STREAM.has(provider);
-    const runReal = (): unknown => (hasOptions ? orig(kwargs, ...rest) : orig(...args));
+    // `hasOptions` is false for the legacy Gemini positional form (`generateContent("hi")`), whose
+    // request must switch to the options-object form once anything rewrote it — otherwise a reroute
+    // would be applied to `kwargs` and then not sent.
+    const runReal = (): unknown =>
+      hasOptions || call.metadata.rerouted ? orig(kwargs, ...rest) : orig(...args);
     // A pre-flight refusal (tokenguard's budget block, acttrace's guard) threw out of an async
     // function before, i.e. it *rejected*. Keep it a rejection now that the wrapper is sync.
+    // `intercept` applies any Reroute to `kwargs` itself and keeps running the chain — only a
+    // recorded response short-circuits. See its docstring for the ordering contract.
     let directive: unknown;
     try {
-      directive = intercept(call);
+      directive = intercept(call, kwargs, provider);
     } catch (err) {
       return Promise.reject(err);
-    }
-    if (directive instanceof Reroute) {
-      applyReroute(call, kwargs, directive, provider);
-      return observe(() => orig(kwargs, ...rest), call, provider, start, streaming);
     }
     if (directive !== MISS) {
       call.metadata.replayed = true;
@@ -376,6 +482,67 @@ function wrap(orig: (...args: unknown[]) => unknown, provider: string, modelDefa
       return Promise.resolve(directive);
     }
     return observe(runReal, call, provider, start, streaming);
+  };
+  (wrapper as { [WRAPPED]?: boolean })[WRAPPED] = true;
+  return wrapper;
+}
+
+/**
+ * Wrap an aws-sdk-v3 client's `send` — the polymorphic entrypoint every AWS command goes through.
+ *
+ * Deliberately its own function rather than a generalisation of {@link wrap}. `send` differs in three
+ * ways that would each need a hook in `wrap`'s per-request hot path: the provider tag is resolved
+ * **per call** from the command's class, the request fields live on `command.input` rather than in the
+ * call arguments, and a non-Converse command must be handed through completely untouched. Keeping it
+ * separate means every other provider's path is byte-for-byte unchanged — worth more here than
+ * removing the ~20 duplicated lines.
+ */
+function wrapAwsSend(orig: (...args: unknown[]) => unknown) {
+  const wrapper = (...args: unknown[]): unknown => {
+    const command = args[0] as
+      | { constructor?: { name?: string }; input?: unknown }
+      | null
+      | undefined;
+    const provider = AWS_COMMAND_PROVIDER[command?.constructor?.name ?? ''];
+    const input = command?.input;
+    // NEGATIVE-CONTROL PATH, and the reason this wrapper is safe to install on a shared `send`:
+    // anything that is not a Converse command with an input object — `InvokeModelCommand`,
+    // `ListFoundationModelsCommand`, a future command, a bare object — goes straight through with the
+    // original arguments, emitting nothing and allocating nothing. Ditto a `send` reached from inside
+    // another instrumented call, which is the same request counted by its outer wrapper.
+    if (provider === undefined || input == null || typeof input !== 'object' || syncCallDepth > 0) {
+      return orig(...args);
+    }
+    const kwargs: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+    const rest = args.slice(1);
+    const { call, start } = pre(provider, kwargs, args, '');
+    const streaming = ALWAYS_STREAM.has(provider);
+    let directive: unknown;
+    try {
+      directive = intercept(call, kwargs, provider);
+    } catch (err) {
+      return Promise.reject(err); // a pre-flight refusal (budget block, guard) rejects the caller
+    }
+    if (directive === MISS && call.metadata.rerouted) {
+      // Something rewrote the request — put it back on the command. `command.input` is both writable
+      // and replaceable (measured on @aws-sdk/client-bedrock-runtime 3.1100.0), which is what lets a
+      // guard's redact-before-send and a budget's clamp/downgrade reach the wire without core ever
+      // importing the command class.
+      (command as { input: unknown }).input = kwargs;
+      return observe(() => orig(command, ...rest), call, provider, start, streaming);
+    }
+    if (directive !== MISS) {
+      call.metadata.replayed = true;
+      if (streaming) return Promise.resolve(replayStream(call, directive, provider, start));
+      try {
+        post(call, directive, provider, start);
+      } catch (err) {
+        return Promise.reject(err); // a post-flight subscriber block still reaches the caller
+      }
+      return Promise.resolve(directive);
+    }
+    // Nothing rewrote the request, so hand the SDK its own command object untouched.
+    return observe(() => orig(...args), call, provider, start, streaming);
   };
   (wrapper as { [WRAPPED]?: boolean })[WRAPPED] = true;
   return wrapper;
@@ -407,10 +574,15 @@ function observe(
   streaming: boolean,
 ): unknown {
   let returned: unknown;
+  syncCallDepth++;
   try {
     returned = runReal();
   } catch (err) {
     return Promise.reject(err); // a client that throws synchronously must still reject
+  } finally {
+    // Decremented as soon as the real call returns its promise — the window is exactly the
+    // synchronous prologue, which is all a nested `send` needs to see. See `syncCallDepth`.
+    syncCallDepth--;
   }
   const settled = Promise.resolve(returned).then((response) => {
     if (streaming) return proxyStream(call, response, provider, start);
@@ -438,9 +610,70 @@ function observe(
           return { ...sdk, data: await settled };
         };
       }
+      // `_thenUnwrap` is how openai-node builds `responses.parse` / `chat.completions.parse` /
+      // `runTools`: it derives a NEW promise from the SDK's own object. Forwarded blindly (as every
+      // other extra is), that derived promise never touches our chain — so a post-flight block
+      // reached the wrong promise and the caller resolved anyway.
+      //
+      // Measured (`plan/evidence-gapclose-2026-07-31/s3_probe_output_gate_helper.mjs`): on the helper
+      // path the output gate *did* run and *did* decide `block` — a `GuardrailDecision`
+      // `keyword_deny:block` was on the bus — and its exception rejected `settled`, which line 562
+      // deliberately marks handled so a `withResponse()`-only caller gets no noisy warning. The gate
+      // was never the problem; the promise the caller awaited was. (This is why an earlier
+      // `parseResponse` takeover did not close it: parsing was never the mechanism.)
+      //
+      // So the derived promise is gated on ours: the SDK's transform still produces the value, and a
+      // post-flight rejection still reaches whoever awaits it.
+      if (prop === '_thenUnwrap') {
+        const sdkThenUnwrap = (returned as Record<PropertyKey, unknown>)._thenUnwrap;
+        if (typeof sdkThenUnwrap === 'function') {
+          return (transform: AnyFn): unknown => {
+            const derived = (sdkThenUnwrap as AnyFn).call(returned, transform);
+            // `settled` first: a block must reject even if the transform would have succeeded.
+            const gated = settled.then(() => derived);
+            // Keep the SDK's extras (`asResponse`, a further `_thenUnwrap`) reachable on the result,
+            // recursively gated — `parse()` results are chained again in the wild.
+            return gateDerived(gated, derived);
+          };
+        }
+      }
       if (!PROMISE_CHAIN.has(prop)) {
         const extra = (returned as Record<PropertyKey, unknown>)[prop];
         if (typeof extra === 'function') return (extra as AnyFn).bind(returned);
+      }
+      const own = Reflect.get(target, prop, target);
+      return typeof own === 'function' ? (own as AnyFn).bind(target) : own;
+    },
+  });
+}
+
+/**
+ * Hand back a promise that resolves like `derived` but rejects if our capture chain rejected, while
+ * still exposing whatever the SDK put on `derived` (`asResponse`, a nested `_thenUnwrap`, …).
+ *
+ * Same shape as the proxy in {@link observe}: `then/catch/finally` are ours, everything else is the
+ * SDK's. Recursive, because openai-node chains `_thenUnwrap` on a `_thenUnwrap` result.
+ */
+function gateDerived(gated: Promise<unknown>, derived: unknown): unknown {
+  if (!isPromiseSubclass(derived)) return gated;
+  void gated.catch(() => {}); // the caller may only reach for asResponse(); don't go noisy
+  return new Proxy(gated, {
+    get(target, prop, _receiver) {
+      if (prop === '_thenUnwrap') {
+        const inner = (derived as Record<PropertyKey, unknown>)._thenUnwrap;
+        if (typeof inner === 'function') {
+          return (transform: AnyFn): unknown => {
+            const next = (inner as AnyFn).call(derived, transform);
+            return gateDerived(
+              gated.then(() => next),
+              next,
+            );
+          };
+        }
+      }
+      if (!PROMISE_CHAIN.has(prop)) {
+        const extra = (derived as Record<PropertyKey, unknown>)[prop];
+        if (typeof extra === 'function') return (extra as AnyFn).bind(derived);
       }
       const own = Reflect.get(target, prop, target);
       return typeof own === 'function' ? (own as AnyFn).bind(target) : own;
@@ -537,8 +770,14 @@ function applyReroute(
     [key: string]: unknown;
   };
   const messages = 'messages' in directive.updates ? messagesUpdate : MISSING;
-  Object.assign(kwargs, updates);
-  if ('model' in updates) call.model = updates.model as string;
+  // `model` is mapped to the provider's own kwarg rather than assigned generically — see
+  // MODEL_KWARG for what a generic assignment did to Bedrock.
+  const { model: modelUpdate, ...rest } = updates;
+  Object.assign(kwargs, rest);
+  if ('model' in updates) {
+    kwargs[MODEL_KWARG[provider] ?? 'model'] = modelUpdate;
+    call.model = modelUpdate as string;
+  }
   if (messages !== MISSING) {
     if (provider === 'openai_embeddings') {
       // The embeddings endpoint takes raw text(s) on `input`, not message dicts — map the rerouted

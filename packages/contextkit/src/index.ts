@@ -37,6 +37,31 @@ export type Turn = Record<string, unknown>;
 /** Built-in eviction strategies; `Block.evict` also accepts any `EvictionStrategy` object. */
 export type EvictStrategy = 'drop_oldest' | 'truncate' | 'summarize' | 'compress';
 
+/**
+ * What a {@link Context} does when a block asks for `evict: 'compress'` and no compressor is
+ * available.
+ *
+ * The block is TRUNCATED in that case — lossy, and not reversible the way a compression is (a
+ * squeeze compression hands back a `Handle` you can `.expand()`). This chooses how visible that
+ * substitution is: `'note'` is the historical behaviour (recorded on the block's
+ * {@link BlockDecision} and nothing else), `'warn'` also logs a warning, and `'error'` throws a
+ * {@link MissingCompressorError} rather than quietly truncating. Default `'note'` — additive, and no
+ * existing assembly changes.
+ */
+export type MissingCompressorMode = 'note' | 'warn' | 'error';
+const MISSING_COMPRESSOR_MODES = ['note', 'warn', 'error'] as const;
+
+/**
+ * Thrown (only under `onMissingCompressor: 'error'`) instead of truncating a `compress` block for
+ * which no compressor is available.
+ */
+export class MissingCompressorError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MissingCompressorError';
+  }
+}
+
 /** A summarize callback `(content, targetTokens) -> summary` (sync or async). */
 export type Summarizer = (content: string, targetTokens: number) => string | Promise<string>;
 
@@ -336,6 +361,7 @@ export interface ContextOpts {
   compressor?: unknown;
   order?: string;
   imageTokens?: number | ((part: Part) => number);
+  onMissingCompressor?: MissingCompressorMode;
 }
 
 /**
@@ -354,6 +380,7 @@ export class Context {
   reserveOutput: number;
   order: string;
   imageTokens: number | ((part: Part) => number);
+  onMissingCompressor: MissingCompressorMode;
   private _compressor: unknown;
   private blocks: Block[];
   private _report: AssemblyReport | null;
@@ -371,6 +398,14 @@ export class Context {
     this.reserveOutput = opts.reserveOutput ?? 0;
     this._compressor = opts.compressor ?? null;
     this.order = order;
+    const onMissing = opts.onMissingCompressor ?? 'note';
+    if (!(MISSING_COMPRESSOR_MODES as readonly string[]).includes(onMissing)) {
+      throw new ValueError(
+        `onMissingCompressor must be one of ${MISSING_COMPRESSOR_MODES.join(', ')}, got ` +
+          `${JSON.stringify(opts.onMissingCompressor)}`,
+      );
+    }
+    this.onMissingCompressor = onMissing;
     // Token cost per image part in multimodal blocks: a flat int, or a callable
     // (part -> tokens) for resolution-aware estimates.
     this.imageTokens = opts.imageTokens ?? 0;
@@ -811,6 +846,22 @@ export class Context {
           small = truncateToTokens(small, contentBudget, this.model, block.keep);
         }
         return [small, 'compressed', '', handle];
+      }
+      // No compressor: the block is TRUNCATED instead — content is discarded, and unlike a
+      // compression that is not reversible. The note has always been recorded here, but a note lives
+      // in the AssemblyReport and nothing obliges a caller to read one, so a forgotten
+      // `@cendor/squeeze` quietly degraded every compress block in production while the assembly
+      // still reported success. `onMissingCompressor` picks how loud that is; the default is the
+      // historical 'note', so nothing changes unless you ask for it.
+      if (this.onMissingCompressor === 'error') {
+        throw new MissingCompressorError(
+          `a ${JSON.stringify(block.role)} block asked for evict: 'compress' but no compressor is available, so its content would be TRUNCATED (lossy, and not reversible the way a compression is). Install @cendor/squeeze, pass new Context({ compressor }), call useCompressor(...), or set onMissingCompressor: 'note' to accept truncation.`,
+        );
+      }
+      if (this.onMissingCompressor === 'warn') {
+        console.warn(
+          `@cendor/contextkit: a ${JSON.stringify(block.role)} block asked for evict: 'compress' but no compressor is available; its content was TRUNCATED instead. Install @cendor/squeeze or pass compressor.`,
+        );
       }
       return [
         truncateToTokens(text, contentBudget, this.model, block.keep),
