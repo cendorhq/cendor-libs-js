@@ -282,6 +282,22 @@ export interface OTelSinkOptions {
    * id) or your backend's time-series count can explode. Default `true`; set `false` for model-only.
    */
   tags?: boolean;
+  /**
+   * An explicit OpenTelemetry `Meter` to create the counters on. Omit it — the default — and they
+   * come from the **global** provider via `metrics.getMeter('cendor.tokenguard')`, lazily per write
+   * until a real provider answers (see `ensureCounters`). Pass one to send metrics somewhere the
+   * global provider isn't: a test's in-memory reader, an isolated provider in a multi-tenant host,
+   * or a second pipeline. Counter names, attributes and the no-OTel no-op are identical either way.
+   *
+   * An injected meter is used **immediately and permanently** — the lazy re-check exists only to
+   * survive the global provider being installed late, which cannot happen to a meter you already
+   * hold.
+   *
+   * Injection exists because there was no way to read these counters without installing a
+   * process-global meter provider — filed as a product improvement by the external suite, which had
+   * to install one to assert anything.
+   */
+  meter?: { createCounter(name: string): Counter } | null;
 }
 
 type Counter = { add: (value: number, attrs: Record<string, unknown>) => void };
@@ -307,7 +323,14 @@ export class OTelSink {
 
   constructor(opts: OTelSinkOptions = {}) {
     this.emitTags = opts.tags ?? true;
-    // NOTE: no meter acquisition here — see `ensureCounters`.
+    // NOTE: no meter acquisition here — see `ensureCounters` — UNLESS one was injected, in which
+    // case there is nothing to wait for: an explicit meter cannot be replaced by a late global one.
+    if (opts.meter != null) {
+      this.tokensCounter = opts.meter.createCounter('gen_ai.client.token.usage');
+      this.costCounter = opts.meter.createCounter('gen_ai.client.cost.usd');
+      this.reasoningCounter = opts.meter.createCounter('gen_ai.client.reasoning.token.usage');
+      this.bound = true;
+    }
   }
 
   /**

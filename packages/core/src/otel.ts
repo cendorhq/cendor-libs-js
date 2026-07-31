@@ -64,6 +64,18 @@ function loadTracer(): OTelTracer | null {
 export interface SpanOptions {
   /** Optional system name, recorded as `gen_ai.system`. */
   provider?: string;
+  /**
+   * An explicit OpenTelemetry `Tracer` to emit on. Omit it — the default — and the span goes to the
+   * **global** provider via `trace.getTracer('cendor.core')`, exactly as before. Pass one to send
+   * spans somewhere the global provider isn't: a test's in-memory exporter, an isolated provider in
+   * a multi-tenant host, or a second pipeline. The span name, attributes and the no-OTel behaviour
+   * (`fn(null)`) are identical either way.
+   *
+   * Injection exists because there was no way to observe these spans without installing a
+   * process-global provider — filed as a product improvement by the external suite, which had to
+   * install one to assert anything.
+   */
+  tracer?: { startActiveSpan<T>(name: string, fn: (span: OTelSpan) => T): T } | null;
   /** Extra span attributes, set verbatim. */
   [key: string]: unknown;
 }
@@ -81,11 +93,21 @@ export interface SpanOptions {
  * registered OTel context manager (installed by `NodeSDK` / `NodeTracerProvider.register()`); when
  * none is registered the callback still runs and the span is simply not propagated (today's
  * behavior), never an error.
+ *
+ * Pass `opts.tracer` to emit on a tracer you own instead of the global provider — see
+ * {@link SpanOptions.tracer}. An attribute literally named `tracer` or `provider` is consumed as the
+ * option, not recorded (already true of `provider`).
+ *
+ * @example
+ * ```ts
+ * import { otel } from '@cendor/core';
+ * otel.span('gpt-4o', { provider: 'openai' }, (sp) => { void sp; });  // sp is null without OTel
+ * ```
  */
 export function span<T>(model: string, opts: SpanOptions, fn: (span: OTelSpan | null) => T): T {
-  const tracer = loadTracer();
+  const { provider, tracer: injected, ...attributes } = opts;
+  const tracer = injected ?? loadTracer();
   if (tracer === null) return fn(null);
-  const { provider, ...attributes } = opts;
   return tracer.startActiveSpan(`chat ${model}`, (current: OTelSpan): T => {
     let ended = false;
     const end = (): void => {

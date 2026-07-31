@@ -157,6 +157,58 @@ export function register(model: string, rates: RegisterRates): void {
   t.models[model] = r;
 }
 
+/** Options for {@link registerDeployment}. */
+export interface RegisterDeploymentOptions {
+  /** A model id already in the price table whose rates the deployment should use. */
+  like: string;
+}
+
+/**
+ * Price a **deployment name** by copying the rates of the base model it serves.
+ *
+ * On Azure and Azure AI Foundry the id a call reports is the *deployment* name you chose
+ * (`prod-gpt4o-eastus`), not a model id — so it is absent from every price table, its cost is `null`,
+ * and a USD budget silently never binds. You already know which model it serves; this says so once.
+ *
+ * This is an **explicit** mapping you supply — deliberately not the automatic `-preview` / `-latest`
+ * alias guessing that was considered and rejected (a confidently wrong price is worse than an honest
+ * `null`). Nothing is inferred from the deployment's name.
+ *
+ * **Copy-at-registration, not a live alias.** `like`'s rates are read *now* and stored as
+ * `deployment`'s own registration, exactly as if you had called {@link register} with them. So a later
+ * `refresh()` that reprices `like` does **not** reprice `deployment` (call this again to pick the new
+ * rates up), and — like every registration — it survives `refresh()` and overrides a snapshot entry
+ * with the same id.
+ *
+ * `like` goes through the same lookup reduction as a real call, so a dated or Bedrock-decorated base
+ * id works.
+ *
+ * @throws {@link UnknownModelError} if `like` is not in the active table. Registering nothing and
+ * letting the deployment stay unpriced would reproduce the exact silence this function removes.
+ *
+ * @example
+ * ```ts
+ * import { prices } from '@cendor/core';
+ * prices.registerDeployment('prod-gpt4o-eastus', { like: 'gpt-4o' });
+ * prices.estimate('prod-gpt4o-eastus', 1000, { outputTokens: 500 }); // priced like gpt-4o
+ * ```
+ */
+export function registerDeployment(deployment: string, opts: RegisterDeploymentOptions): Rates {
+  const base = ratesFor(opts.like); // throws UnknownModelError — never register a silent nothing
+  // Copy EVERY rate key, not an enumerated four: a base entry may carry a key this function has
+  // never heard of (a future rate category, or a hand-written `register()` dict), and dropping it
+  // would silently under-price the deployment. `Decimal` is immutable, so sharing instances is safe.
+  const copy: Rates = { ...base };
+  // A base with no `input` rate cannot price anything — `estimate` would raise later, which is the
+  // silent-unpriced outcome this function exists to prevent. Fail at registration instead.
+  if (copy.input === undefined) throw new UnknownModelError(opts.like);
+  const t = ensureLoaded();
+  if (!t.models) t.models = {};
+  registered[deployment] = copy; // survives refresh(), exactly like register()
+  t.models[deployment] = copy;
+  return { ...copy };
+}
+
 /** Sorted list of model ids known to the current price table. */
 export function models(): string[] {
   return Object.keys(ensureLoaded().models ?? {}).sort();

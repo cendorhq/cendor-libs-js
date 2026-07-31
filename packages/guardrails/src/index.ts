@@ -103,6 +103,42 @@ let decisionsCounter: { add: (value: number, attrs: Record<string, unknown>) => 
   null;
 let decisionsCounterChecked = false;
 
+/**
+ * Create the `cendor.guardrails.decisions` counter on an explicit OpenTelemetry `Meter`.
+ *
+ * By default the counter comes from the **global** meter provider
+ * (`metrics.getMeter('cendor.guardrails')`), lazily on the first decision. Call this to point it at a
+ * meter you own instead: a test's in-memory reader, an isolated provider in a multi-tenant host, or a
+ * second pipeline. The counter name and its bounded `guardrail` / `stage` / `action` labels are
+ * identical either way, and this never changes whether a decision is taken — the counter is
+ * observability, not a gate.
+ *
+ * `useMeter(null)` restores the default (the global provider is re-read on the next decision).
+ *
+ * Injection exists because there was no way to read this counter without installing a process-global
+ * meter provider — filed as a product improvement by the external suite, which had to install one to
+ * assert anything.
+ *
+ * @example
+ * ```ts
+ * import { useMeter } from '@cendor/guardrails';
+ * useMeter(null); // back to the global provider
+ * ```
+ */
+export function useMeter(
+  meter: {
+    createCounter(name: string): { add: (v: number, a: Record<string, unknown>) => void };
+  } | null,
+): void {
+  if (meter == null) {
+    decisionsCounter = null;
+    decisionsCounterChecked = false; // re-read the global provider on the next decision
+    return;
+  }
+  decisionsCounter = meter.createCounter('cendor.guardrails.decisions');
+  decisionsCounterChecked = true;
+}
+
 function decisionsAdd(attrs: Record<string, unknown>): void {
   if (!decisionsCounterChecked) {
     decisionsCounterChecked = true;
@@ -116,7 +152,18 @@ function decisionsAdd(attrs: Record<string, unknown>): void {
       decisionsCounter = null; // OpenTelemetry not installed — stay in no-op mode
     }
   }
-  if (decisionsCounter !== null) decisionsCounter.add(1, attrs);
+  if (decisionsCounter !== null) {
+    // "Best-effort" has to be true in the code, not just the comment. Measured 2026-07-31
+    // (GAPCLOSE S8, in the Python twin): a counter whose `add` threw propagated out of the gate and
+    // took the GOVERNANCE DECISION with it — a metrics backend could fail a guardrail. A real OTel
+    // counter does not throw, so this only ever bit a custom/injected meter; it is guarded because
+    // the failure mode is exactly backwards for this library.
+    try {
+      decisionsCounter.add(1, attrs);
+    } catch {
+      /* observability must never gate a decision */
+    }
+  }
 }
 
 function handle(
