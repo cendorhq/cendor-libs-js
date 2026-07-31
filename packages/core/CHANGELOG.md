@@ -1,5 +1,82 @@
 # @cendor/core
 
+## 3.2.0
+
+### Minor Changes
+
+- 9380b7d: feat: inject the OpenTelemetry tracer/meter instead of reaching for the global provider
+
+  Three published APIs resolved their pipeline from the OpenTelemetry **global** provider with no
+  parameter, so the only way to observe any of them was to install a process-global provider. The
+  external black-box suite filed all three as product improvements — its keyless tree had to install
+  in-memory global providers for exactly these APIs and no others, purely to assert anything about them.
+
+  ```ts
+  import { otel } from "@cendor/core";
+  import { OTelSink } from "@cendor/tokenguard/sinks";
+  import { useMeter } from "@cendor/guardrails";
+
+  otel.span("gpt-4o", { tracer: myTracer }, (span) => {
+    void span;
+  });
+  useSink(new OTelSink({ meter: myMeter }));
+  useMeter(myMeter); // useMeter(null) restores the global default
+  ```
+
+  The global provider stays the default in all three, unchanged, and each has a negative control
+  asserting it: omit the tracer/meter and the span or counter goes exactly where it went before. Names,
+  attributes, and the without-`@opentelemetry/api` no-op are identical on both paths. In
+  `OTelSink` an injected meter also skips the lazy re-acquisition — that dance exists because a global
+  meter provider can be installed _after_ construction, which cannot happen to a meter you already hold.
+
+  Use it for the three cases the global provider is wrong for: a **test** asserting spans/metrics without
+  polluting the process, a **multi-tenant host** with a provider per tenant, and a **second pipeline**
+  beside the app's own.
+
+  **Also fixed, in `@cendor/guardrails`: the decisions counter can no longer fail a guardrail.** The
+  comment above it has always said "best-effort observability", and the code did not implement that — an
+  exception from the counter's `add` propagated out of the gate and took the **governance decision** with
+  it. Found while writing the negative control for `useMeter` in the Python twin. A real OpenTelemetry
+  counter does not throw, so only a custom or injected meter was ever exposed, but the failure mode is
+  exactly backwards for this library: the increment is now guarded and the decision is taken, emitted,
+  and chained regardless.
+
+  Python parity: `otel.span(model, tracer=…)` in `cendor-core` 1.16.0, `OTelSink(meter=…)` in
+  `cendor-tokenguard` 1.7.0, `guardrails.use_meter(meter)` in `cendor-guardrails` 1.7.0.
+
+- 9380b7d: feat(core): `prices.registerDeployment(name, { like })` — price an Azure/Foundry deployment name
+
+  On Azure and Azure AI Foundry the id a call reports is the **deployment name you chose**, not a model
+  id. It is therefore in no price table: `cost` is `null`, `@cendor/tokenguard` records `$0`, and a USD
+  budget silently never binds — the blind spot the external black-box suite recorded verbatim as "would
+  improve DX". You already know which model the deployment serves; this says so once, instead of making
+  you find and re-type a rate card.
+
+  ```ts
+  import { prices } from "@cendor/core";
+  prices.registerDeployment("prod-gpt4o-eastus", { like: "gpt-4o" });
+  prices.estimate("prod-gpt4o-eastus", 1000, { outputTokens: 500 }); // priced like gpt-4o
+  ```
+
+  Deliberately **explicit**. This is not the `-preview` / `-latest` alias _guessing_ that was considered
+  and rejected — a confidently wrong price is worse than an honest `null` — and nothing is inferred from
+  the deployment's name.
+
+  **Copy-at-registration, not a live alias.** `like`'s rates are read now and stored as the deployment's
+  own registration, so a later `refresh()` that reprices the base does **not** reprice the deployment
+  (call it again to pick that up), and — like every registration — it survives `refresh()` and overrides
+  a snapshot row with the same id. The alternative would make a deployment's cost depend on whether its
+  base still exists in whatever table was last fetched, and would have to invent an answer when it
+  doesn't.
+
+  `like` goes through the same lookup reduction a real call does, so a dated or Bedrock-decorated base id
+  works. An unknown `like` **throws `UnknownModelError`** rather than leaving the deployment quietly
+  unpriced, which would reproduce the exact silence the function exists to remove. Every rate key is
+  copied rather than an enumerated few, so a future rate category cannot be silently dropped.
+
+  Also re-exported as `registerDeployment` from `@cendor/sdk`. Python parity:
+  `prices.register_deployment(deployment, like="gpt-4o")` in `cendor-core` 1.16.0.
+
 ## 3.1.0
 
 ### Minor Changes
