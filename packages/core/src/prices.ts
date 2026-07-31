@@ -132,8 +132,8 @@ export interface RegisterRates {
  * Rates are exact `Decimal`. The higher-level `@cendor/sdk` `registerModelPrice` handles per-1M/1K
  * unit conversion before calling this. Registrations **survive `refresh()`** (re-applied after
  * every table swap, overriding a snapshot entry with the same id); dropped by {@link _reset}.
- * (Python has no public `prices.register` — there you register a price with
- * `cendor.sdk.register_model_price(...)`.)
+ * (Python reached parity in `cendor-core` 1.15.0: `prices.register(model, rates)` per-token, plus
+ * `prices.register_model_price(model, input=…, output=…, per="1M")` for the per-1M form.)
  *
  * @example
  * ```ts

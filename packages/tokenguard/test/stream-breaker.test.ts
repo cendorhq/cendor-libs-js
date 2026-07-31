@@ -154,3 +154,96 @@ describe('onExceed: break', () => {
     expect(() => tokenguard.budget({ tokens: 10, onExceed: 'brake' })).toThrow(/on_exceed/);
   });
 });
+
+describe('onExceed: break — Gemini streams (@cendor/core >= 3.1.0)', () => {
+  // No behaviour change in tokenguard: the breaker rides core's stream-observer seam, so it works
+  // for every capture path core adds. But "should" is not "does" — until @cendor/core 3.1.0 a
+  // `generateContentStream` call emitted no LLMCall at all, so a break budget around a streamed
+  // Gemini call was **silently inert**. Pinned here on the real chunk shape.
+  let events: unknown[];
+  beforeEach(() => {
+    bus._reset();
+    tokenguard.reset();
+    events = [];
+    bus.subscribe((e) => events.push(e));
+  });
+  afterEach(() => {
+    bus._reset();
+    tokenguard.reset();
+  });
+
+  function geminiChunk(text: string, candidates: number) {
+    return {
+      text,
+      usageMetadata: { promptTokenCount: 4, candidatesTokenCount: candidates },
+    };
+  }
+  function closable(chunks: unknown[]): {
+    gen: () => AsyncGenerator<unknown>;
+    aborted: () => boolean;
+  } {
+    let aborted = false;
+    async function* gen() {
+      try {
+        for (const ch of chunks) yield ch;
+      } finally {
+        aborted = true;
+      }
+    }
+    return { gen, aborted: () => aborted };
+  }
+  function geminiClient(gen: () => AsyncGenerator<unknown>) {
+    return instrument({ models: { generateContentStream: async () => gen() } }) as {
+      models: { generateContentStream: (p: unknown) => Promise<AsyncIterable<unknown>> };
+    };
+  }
+
+  it('cuts a runaway Gemini stream and closes it', async () => {
+    const chunks = Array.from({ length: 50 }, (_v, i) =>
+      geminiChunk('one two three four five ', 5 * (i + 1)),
+    );
+    const s = closable(chunks);
+    const c = geminiClient(s.gen);
+    const got: unknown[] = [];
+    await withBudget({ tokens: 20, onExceed: 'break', name: 'gemini-stream-cap' }, async () => {
+      const stream = await c.models.generateContentStream({
+        model: 'gemini-2.5-flash',
+        contents: 'go',
+      });
+      await expect(
+        (async () => {
+          for await (const ch of stream) got.push(ch);
+        })(),
+      ).rejects.toThrow(BudgetExceeded);
+    });
+    expect(got.length).toBeGreaterThan(0);
+    expect(got.length).toBeLessThan(50);
+    expect(s.aborted()).toBe(true);
+    const calls = events.filter((e): e is LLMCall => e instanceof LLMCall);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.provider).toBe('google');
+    const broken = events.filter(
+      (e): e is BudgetEvent => e instanceof BudgetEvent && e.action === 'broken',
+    );
+    expect(broken).toHaveLength(1);
+    expect(broken[0]?.name).toBe('gemini-stream-cap');
+  });
+
+  it('negative control: an under-cap Gemini stream completes and settles on real usage', async () => {
+    const s = closable([geminiChunk('hi ', 2), geminiChunk('there', 4)]);
+    const c = geminiClient(s.gen);
+    const got: unknown[] = [];
+    await withBudget({ tokens: 10_000, onExceed: 'break' }, async () => {
+      const stream = await c.models.generateContentStream({
+        model: 'gemini-2.5-flash',
+        contents: 'go',
+      });
+      for await (const ch of stream) got.push(ch);
+    });
+    expect(got).toHaveLength(2);
+    const calls = events.filter((e): e is LLMCall => e instanceof LLMCall);
+    expect(calls[0]?.usage?.outputTokens).toBe(4);
+    expect(calls[0]?.metadata.usage_estimated).toBeUndefined();
+    expect(events.filter((e) => e instanceof BudgetEvent && e.action === 'broken')).toHaveLength(0);
+  });
+});

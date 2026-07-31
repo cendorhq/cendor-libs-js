@@ -186,15 +186,24 @@ function findTargets(client: unknown): Target[] {
   // @google/genai SDK: sync `client.models.generateContent` + (parity) async
   // `client.aio?.models?.generateContent`. In the JS SDK there is only one async surface (no `aio`),
   // but the `aio` probe is harmless and keeps parity with the Python detection.
+  // The SDK streams through a *separate method* (`generateContentStream`) rather than a
+  // `stream: true` kwarg, so it needs its own always-stream target — without one a streamed Gemini
+  // call emitted nothing at all (measured live 2026-07-31: zero LLMCalls, both languages).
   const google: Target[] = [];
   const models = c.models as Record<string, unknown> | undefined;
   if (models && typeof models.generateContent === 'function') {
     google.push([models, 'generateContent', 'google']);
   }
+  if (models && typeof models.generateContentStream === 'function') {
+    google.push([models, 'generateContentStream', 'google_stream']);
+  }
   const aio = c.aio as Record<string, unknown> | undefined;
   const aioModels = aio?.models as Record<string, unknown> | undefined;
   if (aioModels && typeof aioModels.generateContent === 'function') {
     google.push([aioModels, 'generateContent', 'google']);
+  }
+  if (aioModels && typeof aioModels.generateContentStream === 'function') {
+    google.push([aioModels, 'generateContentStream', 'google_stream']);
   }
   if (google.length > 0) return google;
   // Ollama: `client.chat(...)` is itself callable (vs OpenAI's `chat` namespace). Checked LAST.
@@ -206,18 +215,27 @@ const PUBLIC_PROVIDER: Record<string, string> = {
   openai_responses: 'openai',
   openai_embeddings: 'openai',
   bedrock_stream: 'bedrock',
+  google_stream: 'google',
 };
+
+/** Internal tags whose request shape is Gemini's (`contents`, not `messages`). */
+const GOOGLE_TAGS = new Set<string>(['google', 'google_stream']);
 function publicProvider(provider: string): string {
   return PUBLIC_PROVIDER[provider] ?? provider;
 }
 
 /** Detection tags whose target is *always* streaming (there is no `stream: true` kwarg to key off —
- * the iterable arrives via a fixed response shape). Bedrock's `converse_stream` is the only one. */
-const ALWAYS_STREAM = new Set<string>(['bedrock_stream']);
+ * the iterable arrives from a dedicated method). Bedrock's `converse_stream` and google-genai's
+ * `generateContentStream` are the two. */
+const ALWAYS_STREAM = new Set<string>(['bedrock_stream', 'google_stream']);
 
 /** Internal tag → the provider the stream extractors (`streamText`/`streamUsage`) should use for a
- * wrapped stream. `bedrock_stream` reuses the plain `bedrock` branches. */
-const STREAM_PROVIDER: Record<string, string> = { bedrock_stream: 'bedrock' };
+ * wrapped stream. `bedrock_stream` reuses the plain `bedrock` branches, `google_stream` the
+ * `google` ones. */
+const STREAM_PROVIDER: Record<string, string> = {
+  bedrock_stream: 'bedrock',
+  google_stream: 'google',
+};
 function streamProvider(provider: string): string {
   return STREAM_PROVIDER[provider] ?? provider;
 }
@@ -226,7 +244,11 @@ function streamProvider(provider: string): string {
  * Chat Completions / Anthropic / Bedrock / Ollama use `messages`; the Responses API uses `input`;
  * Gemini uses `contents` — but it also needs its own value shape, so `applyReroute` routes `google`
  * through {@link geminiContents} rather than this table. */
-const MESSAGES_KWARG: Record<string, string> = { openai_responses: 'input', google: 'contents' };
+const MESSAGES_KWARG: Record<string, string> = {
+  openai_responses: 'input',
+  google: 'contents',
+  google_stream: 'contents',
+};
 
 /**
  * Wrap a provider client so each call emits an `LLMCall` on the bus. Detection is structural. Unknown
@@ -253,7 +275,7 @@ export function instrument<T>(client: T): T {
     const fn = owner[attr] as ((...args: unknown[]) => unknown) & { [WRAPPED]?: boolean };
     if (fn[WRAPPED]) continue;
     let modelDefault = '';
-    if (provider === 'google') {
+    if (GOOGLE_TAGS.has(provider)) {
       // The legacy @google/generative-ai GenerativeModel binds the model id to the object (`.model`,
       // e.g. "models/gemini-1.5-pro"), not the call args — read it so the LLMCall carries a real,
       // priceable model id (strip the "models/" prefix). The @google/genai Client has no such field;
@@ -526,7 +548,7 @@ function applyReroute(
       const contents = msgs.map((m) => String(m.content ?? ''));
       const original = kwargs.input;
       kwargs.input = typeof original === 'string' && contents.length > 0 ? contents[0] : contents;
-    } else if (provider === 'google') {
+    } else if (GOOGLE_TAGS.has(provider)) {
       // Gemini takes a string / Content / Part on `contents`, never a message dict — back-map it.
       kwargs.contents = geminiContents(messages, kwargs.contents);
     } else {
@@ -595,7 +617,7 @@ function extractRequest(
     const messages = Array.isArray(kwargs.messages) ? (kwargs.messages as Message[]) : [];
     return { model: (kwargs.modelId as string) ?? '', messages };
   }
-  if (provider === 'google') {
+  if (GOOGLE_TAGS.has(provider)) {
     // Gemini messages ride `contents` (or the first positional arg on the legacy surface); the model
     // id rides `model` on the new client, else the object-bound modelDefault on the legacy one.
     let contents: unknown = kwargs.contents;
@@ -873,7 +895,19 @@ function streamUsage(chunks: unknown[], provider: string): Usage | null {
     }
     return null;
   }
-  // openai / huggingface / ollama / google: usage rides one (final) chunk, full-response shaped.
+  if (provider === 'google') {
+    // Gemini puts `usageMetadata` on EVERY chunk carrying the *running* totals, not just the final
+    // one (measured 2026-07-31 on @google/genai: two chunks, both `[4, 7, 11]`). Taking the first
+    // usage-bearing chunk — what the generic loop below does — would under-count a longer stream.
+    // Take the LAST one: it is the final total.
+    let last: Usage | null = null;
+    for (const ch of chunks) {
+      const u = extractUsage(ch, 'google');
+      if (u !== null) last = u;
+    }
+    return last;
+  }
+  // openai / huggingface / ollama: usage rides one (final) chunk, full-response shaped.
   for (const ch of chunks) {
     const u = extractUsage(ch, provider);
     if (u !== null) return u;
