@@ -80,7 +80,14 @@ describe('prices — cross-language conformance (prices/1)', () => {
   });
 
   it('sources() lists the built-in live adapters', () => {
-    expect(prices.sources()).toEqual(['azure', 'litellm', 'openrouter']);
+    expect(prices.sources()).toEqual([
+      'aws',
+      'azure',
+      'litellm',
+      'modelsdev',
+      'openrouter',
+      'vercel',
+    ]);
   });
 
   it('register() adds a model so estimate() and models() see it', () => {

@@ -89,6 +89,25 @@ export class UnpricedModelWarning extends Error {
 }
 
 /**
+ * Warned **once per process** when a USD budget estimates from an old price table.
+ *
+ * A USD cap enforced against stale rates is quietly wrong in a direction that depends on which way
+ * prices moved: after a price *cut* the estimate is high, so the cap binds early (conservative);
+ * after a price *rise* it is low, so **the cap binds late and you overspend**. That second case is
+ * the one worth a warning.
+ *
+ * Once per process, not per call — a budget in a hot loop must not become a log flood. Silence it
+ * with `configure({ onStalePrices: 'ignore' })`, move the threshold with `stalePricesAfterDays`, or
+ * fix it properly with `await prices.refresh()`. (Python parity: `StalePriceTableWarning`.)
+ */
+export class StalePriceTableWarning extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StalePriceTableWarning';
+  }
+}
+
+/**
  * A pre-flight budget action, emitted on the `@cendor/core` bus so `@cendor/acttrace` chains it as a
  * `budget_event` and an OpenTelemetry mirror can surface it in your APM/SIEM. A blocked call never
  * reaches the bus as an `LLMCall` (it's refused pre-flight), so this event is the *only* signal that
@@ -190,6 +209,21 @@ export function onUnpricedWarning(listener: UnpricedWarningListener): () => void
   warningListeners.add(listener);
   return () => {
     warningListeners.delete(listener);
+  };
+}
+
+type StaleWarningListener = (warning: StalePriceTableWarning) => void;
+const staleListeners = new Set<StaleWarningListener>();
+
+/**
+ * Register a listener for {@link StalePriceTableWarning}s (the TS analog of a Python warning
+ * filter). Returns an unsubscribe function. With at least one listener installed the warning goes
+ * to the listeners and NOT to `console.warn`; a listener may re-throw to escalate it to an error.
+ */
+export function onStalePricesWarning(listener: StaleWarningListener): () => void {
+  staleListeners.add(listener);
+  return () => {
+    staleListeners.delete(listener);
   };
 }
 
@@ -308,6 +342,16 @@ let droppedCount = 0;
 let onUnpriced = DEFAULT_ON_UNPRICED;
 const warnedUnpriced = new Set<string>();
 
+/** How a USD budget treats an OLD price table: `'warn'` (default) or `'ignore'`. Mirrors
+ * `onUnpriced`'s shape. An *undatable* table (litellm, openrouter, vercel publish no as-of date) is
+ * never called stale — it already surfaces through `prices.sourceName()` / `prices.explain()`, and
+ * inventing an age would be worse than saying nothing. */
+const DEFAULT_ON_STALE_PRICES = 'warn';
+const DEFAULT_STALE_PRICES_AFTER_DAYS = 45;
+let onStalePrices: string = DEFAULT_ON_STALE_PRICES;
+let stalePricesAfterDays = DEFAULT_STALE_PRICES_AFTER_DAYS;
+let warnedStalePrices = false; // once per process, per reset()
+
 function currentTags(): Record<string, unknown> {
   return tagsStore.getStore() ?? {};
 }
@@ -344,6 +388,23 @@ function warnUnpriced(model: string, mode: string): void {
     return;
   }
   for (const listener of warningListeners) listener(warning);
+}
+
+/** Warn once that an active USD budget is estimating from an old price table. */
+function warnStalePrices(): void {
+  if (warnedStalePrices || onStalePrices !== 'warn') return;
+  const age = prices.ageDays();
+  // Fresh, or undatable — an undatable table is not "stale", it is unmeasurable.
+  if (age === null || age <= stalePricesAfterDays) return;
+  warnedStalePrices = true;
+  const warning = new StalePriceTableWarning(
+    `tokenguard: this USD budget is estimating from a price table last updated ${prices.snapshotDate()} (${age} days ago, source='${prices.sourceName()}'). After a price rise a stale table under-estimates, so the cap binds LATE and you overspend. Call await prices.refresh() at startup, or configure({ onStalePrices: 'ignore' }) to silence this. prices.explain(model) shows where a rate came from.`,
+  );
+  if (staleListeners.size === 0) {
+    console.warn(warning.message);
+    return;
+  }
+  for (const listener of staleListeners) listener(warning);
 }
 
 function ensureSubscribed(): void {
@@ -753,6 +814,10 @@ function onCall(call: unknown): void {
       const mode = usdFrame.onExceed;
       warnUnpriced(call.model, typeof mode === 'string' ? mode : 'callable');
     }
+  } else if (frames.some((f) => f.capUsd !== null)) {
+    // The call WAS priced, and a USD cap is enforcing against that price. If the table it came
+    // from is old, say so once — a stale rate after a price rise makes the cap bind late.
+    warnStalePrices();
   }
 
   const tags = { ...(attached ? attached.tags : currentTags()) };
@@ -1166,6 +1231,11 @@ export function useSink(next: Sink | null): Sink | null {
 export interface ConfigureOptions {
   maxRecords?: number | null;
   onUnpriced?: string;
+  /** How a USD budget handles an OLD price table: `'warn'` (default, once per process) or
+   * `'ignore'`. An undatable table is never stale. */
+  onStalePrices?: string;
+  /** Age at which the price table counts as stale. Defaults to 45. */
+  stalePricesAfterDays?: number;
 }
 
 /** Tune tokenguard's runtime behavior. Each argument is independent — omit one to leave it as is. */
@@ -1176,6 +1246,20 @@ export function configure(opts: ConfigureOptions = {}): void {
       throw new ValueError(`on_unpriced must be 'warn' or 'raise', got '${opts.onUnpriced}'`);
     }
     onUnpriced = opts.onUnpriced;
+  }
+  if (opts.onStalePrices !== undefined) {
+    if (opts.onStalePrices !== 'warn' && opts.onStalePrices !== 'ignore') {
+      throw new ValueError(`onStalePrices must be 'warn' or 'ignore', got '${opts.onStalePrices}'`);
+    }
+    onStalePrices = opts.onStalePrices;
+  }
+  if (opts.stalePricesAfterDays !== undefined) {
+    if (!Number.isInteger(opts.stalePricesAfterDays) || opts.stalePricesAfterDays < 0) {
+      throw new ValueError(
+        `stalePricesAfterDays must be a non-negative integer, got '${opts.stalePricesAfterDays}'`,
+      );
+    }
+    stalePricesAfterDays = opts.stalePricesAfterDays;
   }
 }
 
@@ -1199,9 +1283,12 @@ export function reset(): void {
   downgradeRows.length = 0;
   clampRows.length = 0;
   warnedUnpriced.clear();
+  warnedStalePrices = false;
   sink = null;
   maxRecords = DEFAULT_MAX_RECORDS;
   onUnpriced = DEFAULT_ON_UNPRICED;
+  onStalePrices = DEFAULT_ON_STALE_PRICES;
+  stalePricesAfterDays = DEFAULT_STALE_PRICES_AFTER_DAYS;
   _resetTap();
   ensureSubscribed();
 }

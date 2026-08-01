@@ -16,28 +16,97 @@ export class UnknownModelError extends Error {
   }
 }
 
+/**
+ * Thrown by `refresh(url, { required: true })` when the fetch/parse/map failed.
+ *
+ * `refresh()` is contractually never-throw: it resolves `false` and leaves the last-good table
+ * active. Pass `required: true` when running on stale rates would be worse than not running — then
+ * a failure is loud. Never the default. (Python parity: `prices.PriceRefreshError`.)
+ */
+export class PriceRefreshError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PriceRefreshError';
+  }
+}
+
 type Rates = Record<string, Decimal>;
 interface Table {
   _updated?: string;
   models: Record<string, Rates>;
+  _provenance?: Record<string, { src?: string; asof?: string }>;
+  _saved?: { source_name?: string; source_url?: string | null; origin?: string };
 }
 
 let table: Table | null = null;
-let sourceKind = 'bundled'; // "bundled" | "refreshed"
-let sourceNameValue = 'bundled'; // "bundled" | "litellm" | "openrouter" | "azure" | "custom" | "default"
+let sourceKind = 'bundled'; // "bundled" | "refreshed" | "loaded"
+// "bundled" | "feed" | "azure" | "aws" | "modelsdev" | "litellm" | "openrouter" | "vercel" | "custom"
+let sourceNameValue = 'bundled';
 let sourceUrlValue: string | null = null;
 /** Programmatic registrations (see {@link register}) — re-applied on top of every loaded or
  * refreshed table, so a `refresh()` never drops them. */
 const registered: Record<string, Rates> = {};
 
-/** Default static snapshot location used by `refresh()` when no url or source is given. */
+/**
+ * Default table used by `refresh()` when no url or source is given: the **cendor-prices feed** — a
+ * dated, per-row-provenanced `prices/1` table rebuilt daily behind validation gates and served by
+ * GitHub's CDN. Cendor operates no server for this; it is a static file in a public repo, so a
+ * Cendor outage cannot exist to break your cost estimation.
+ */
 export const SNAPSHOT_URL =
-  'https://raw.githubusercontent.com/cendorhq/cendor-libs/main/packages/cendor-core/src/cendor/core/prices.json';
+  'https://raw.githubusercontent.com/cendorhq/cendor-prices/main/prices.json';
 export const LITELLM_URL =
   'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json';
+/** OpenRouter's public model catalog. Gateway **resale** prices: what OpenRouter charges you. */
 export const OPENROUTER_URL = 'https://openrouter.ai/api/v1/models';
-export const AZURE_URL =
-  "https://prices.azure.com/api/retail/prices?api-version=2023-01-01-preview&$filter=productName eq 'Azure OpenAI'";
+/** Vercel AI Gateway's catalog — same shape and the same resale caveat as OpenRouter. Base rates
+ * only; its tiered (long-context) and service-tier prices are out of scope. */
+export const VERCEL_URL = 'https://ai-gateway.vercel.sh/v1/models';
+/** models.dev — MIT, the widest keyless catalog found (177 providers / 5,935 models on
+ * 2026-08-01), per-**1M** rates with a per-row `last_updated`. */
+export const MODELSDEV_URL = 'https://models.dev/api.json';
+
+export const AZURE_API = 'https://prices.azure.com/api/retail/prices';
+export const AZURE_API_VERSION = '2023-01-01-preview';
+/** Region whose meters `refresh({ source: 'azure' })` reads. eastus2 carries the largest Foundry
+ * catalog (1,526 meters on 2026-08-01). Override with `refresh(undefined, { source: 'azure',
+ * region })`. */
+export const AZURE_DEFAULT_REGION = 'eastus2';
+export const AWS_PRICING_HOST = 'https://pricing.us-east-1.amazonaws.com';
+/**
+ * ⚠️ **Both** offer codes are required. Measured 2026-08-01: `AmazonBedrock` alone carries only
+ * Claude 2.0/2.1/3-Haiku/3-Sonnet/Instant — `Claude Sonnet 4` and `Claude Sonnet 4.5` exist **only**
+ * in `AmazonBedrockService`, so a single-offer client silently misses every current Claude rate.
+ */
+export const AWS_OFFERS = ['AmazonBedrock', 'AmazonBedrockService'] as const;
+export const AWS_DEFAULT_REGION = 'us-east-1';
+
+/**
+ * The Azure Retail Prices query `refresh({ source: 'azure' })` issues, for one region.
+ *
+ * ⚠️ **The region term is not an optimisation.** Measured 2026-08-01: with a region this query is
+ * 1,526 meters over 2 pages in 0.7 s; without one it is **≥25,000 rows and still paging after
+ * 28.5 s** — not something a library may do inside one `refresh()`.
+ *
+ * ⚠️ `serviceName eq 'Foundry Models'` replaced the pre-rename `productName eq 'Azure OpenAI'`. The
+ * old filter still returns rows, which is why nothing looked broken — it just saw 462 of the 1,526
+ * and **no GPT-5, DeepSeek, Grok, Mistral, Llama, Phi, Kimi, Qwen or Cohere meter at all**.
+ *
+ * The apostrophes are percent-encoded by hand: `encodeURIComponent` leaves `'` alone but Python's
+ * `quote` escapes it, and the two URLs must be byte-identical so the twins can be diffed. That is
+ * how the original Azure URL defect stayed invisible for so long.
+ */
+export function azureUrl(region: string = AZURE_DEFAULT_REGION): string {
+  const filter = encodeURIComponent(
+    `serviceName eq 'Foundry Models' and armRegionName eq '${region}'`,
+  ).replace(/'/g, '%27');
+  return `${AZURE_API}?api-version=${AZURE_API_VERSION}&${encodeURIComponent('$filter')}=${filter}`;
+}
+
+/** The URL `refresh({ source: 'azure' })` uses by default; {@link azureUrl} is the region-aware form. */
+export const AZURE_URL = azureUrl();
+/** The AWS region index the `aws` source resolves before fetching a region file. */
+export const AWS_URL = `${AWS_PRICING_HOST}/offers/v1.0/aws/{offer}/current/region_index.json`;
 
 /** Optional explicit id aliases applied after prefix-stripping (extend as needed). */
 const ALIASES: Record<string, string> = {};
@@ -284,12 +353,14 @@ export function snapshotDate(): string | null {
   return ensureLoaded()._updated ?? null;
 }
 
-/** `"bundled"` or `"refreshed"` — where the active table came from. */
+/** `"bundled"` | `"refreshed"` | `"loaded"` — where the active table came from. */
 export function source(): string {
   return sourceKind;
 }
 
-/** Finer provenance: `"bundled"` | `"litellm"` | `"openrouter"` | `"azure"` | `"custom"` | `"default"`. */
+/** Finer provenance of the active table: `'bundled'` | `'feed'` | `'azure'` | `'aws'` |
+ * `'modelsdev'` | `'litellm'` | `'openrouter'` | `'vercel'` | `'custom'`. `'feed'` is a bare
+ * `refresh()` — the cendor-prices table. Use {@link explain} for the per-row story. */
 export function sourceName(): string {
   return sourceNameValue;
 }
@@ -333,17 +404,149 @@ function dec(value: DecimalJsonValue): Decimal {
 
 type RawObject = { [key: string]: DecimalJsonValue };
 
+/**
+ * Is this source id namespaced to a **host** rather than naming the model itself?
+ *
+ * ⚠️ Measured 2026-08-01, and it published a wrong number before it was caught. litellm reaches
+ * `claude-3-5-haiku` through `vertex_ai/claude-3-5-haiku` — **Vertex's $1/$5**, not Anthropic's
+ * **$0.80/$4**. Stripping the namespace collapses a host's listing onto the bare id. A direct
+ * naming outranks a host listing; the host case is what `registerModelPrice` /
+ * `registerDeployment` exist for, and the lookup reduction still matches a Bedrock/Vertex *wire*
+ * id onto the bare row at call time.
+ */
+export function isHostId(mid: string): boolean {
+  const s = String(mid).trim().toLowerCase();
+  return s.includes('/') || /^(?:[a-z][a-z0-9_-]*\.)+[a-z]/.test(s);
+}
+
 function mapLitellm(raw: DecimalJsonValue): Table {
   const out: Record<string, Rates> = {};
+  const bare = new Set<string>();
   const obj = raw as RawObject;
   for (const [mid, rec] of Object.entries(obj)) {
     if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) continue;
     const r = rec as RawObject;
-    if (!('input_cost_per_token' in r)) continue;
+    if (!('input_cost_per_token' in r) || r.input_cost_per_token == null) continue;
     const rates: Rates = { input: dec(r.input_cost_per_token as DecimalJsonValue) };
+    // A $0 input rate makes estimate() report $0.00 as a FACT and a USD cap silently never bind.
+    if (!(rates.input as Decimal).greaterThan(0)) continue;
     if (r.output_cost_per_token != null) rates.output = dec(r.output_cost_per_token);
     if (r.cache_read_input_token_cost != null) rates.cached = dec(r.cache_read_input_token_cost);
-    out[normalizeModelId(mid)] = rates;
+    if (r.cache_creation_input_token_cost != null) {
+      rates.cache_write = dec(r.cache_creation_input_token_cost);
+    }
+    const key = normalizeModelId(mid);
+    if (bare.has(key)) continue; // a host listing must never overwrite a direct naming
+    if (!isHostId(mid)) bare.add(key);
+    out[key] = rates;
+  }
+  return { models: out };
+}
+
+/**
+ * models.dev `api.json`: `{provider: {models: {id: {cost: {...}}}}}`, rates per **1M**.
+ *
+ * ⚠️ The payload is **provider → models**, and the same model id appears under many providers at
+ * different prices: measured 2026-08-01, `gpt-5.1` appears 11 times between $1.07 and $1.25 per
+ * MTok, and the providers with the most rows are all resellers (nano-gpt 617, kilo 346,
+ * openrouter 335, vercel 312). "Last one wins" would hand you a random reseller's resale price as
+ * the model's rate, so {@link MODELSDEV_PROVIDERS} is an allowlist with a fixed precedence, not a
+ * tidy-up filter.
+ */
+export const MODELSDEV_PROVIDERS = [
+  'openai',
+  'anthropic',
+  'google',
+  'google-vertex',
+  'xai',
+  'deepseek',
+  'mistral',
+  'meta',
+  'alibaba',
+  'moonshotai',
+  'cohere',
+  'amazon-bedrock',
+  'azure',
+  'groq',
+  'fireworks-ai',
+  'huggingface',
+] as const;
+
+const MD_KEYS: Array<[string, string]> = [
+  ['input', 'input'],
+  ['output', 'output'],
+  ['cache_read', 'cached'],
+  ['cache_write', 'cache_write'],
+];
+
+function mapModelsdev(raw: DecimalJsonValue): Table {
+  const out: Record<string, Rates> = {};
+  const bare = new Set<string>();
+  const million = new Dec(1_000_000);
+  const obj = raw as RawObject;
+  let latest: string | null = null;
+  // Walk in REVERSE precedence so the top of the allowlist is written last and wins.
+  for (const pid of [...MODELSDEV_PROVIDERS].reverse()) {
+    const prov = obj[pid];
+    if (prov === null || typeof prov !== 'object' || Array.isArray(prov)) continue;
+    const models = (prov as RawObject).models;
+    if (models === null || typeof models !== 'object' || Array.isArray(models)) continue;
+    for (const [mid, rec] of Object.entries(models as RawObject)) {
+      if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) continue;
+      const cost = (rec as RawObject).cost;
+      if (cost === null || typeof cost !== 'object' || Array.isArray(cost)) continue;
+      const c = cost as RawObject;
+      if (c.input == null) continue;
+      const rates: Rates = {};
+      for (const [src, dst] of MD_KEYS) {
+        const v = c[src];
+        if (v != null) rates[dst] = dec(v).dividedBy(million);
+      }
+      const input = rates.input;
+      if (input === undefined || !input.greaterThan(0)) continue;
+      const key = normalizeModelId(mid);
+      if (bare.has(key)) continue;
+      if (!isHostId(mid)) bare.add(key);
+      out[key] = rates;
+      const lu = String((rec as RawObject).last_updated ?? '').slice(0, 10);
+      if (lu.length === 10 && (latest === null || lu > latest)) latest = lu;
+    }
+  }
+  const result: Table = { models: out };
+  if (latest !== null) result._updated = latest;
+  return result;
+}
+
+const VERCEL_KEYS: Array<[string, string]> = [
+  ['input', 'input'],
+  ['output', 'output'],
+  ['input_cache_read', 'cached'],
+  ['input_cache_write', 'cache_write'],
+];
+
+/**
+ * Vercel AI Gateway `/v1/models`. Per-token rates as JSON **strings**, filtered to
+ * `type === "language"`. Base rates only — the catalog also carries `input_tiers` /
+ * `service_tiers`, which are out of scope. Gateway **resale** prices, like OpenRouter's. No
+ * catalog-wide date ⇒ undatable, never stamped "today".
+ */
+function mapVercel(raw: DecimalJsonValue): Table {
+  const out: Record<string, Rates> = {};
+  const data = (raw as RawObject).data;
+  if (!Array.isArray(data)) return { models: out };
+  for (const rec of data) {
+    if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) continue;
+    const r = rec as RawObject;
+    if (r.type !== 'language') continue;
+    const pricing = (r.pricing ?? {}) as RawObject;
+    if (pricing.input == null) continue;
+    const rates: Rates = {};
+    for (const [src, dst] of VERCEL_KEYS) {
+      const v = pricing[src];
+      if (v != null && dec(v).greaterThan(0)) rates[dst] = dec(v);
+    }
+    if (rates.input === undefined) continue;
+    out[normalizeModelId(String(r.id ?? ''))] = rates;
   }
   return { models: out };
 }
@@ -367,6 +570,106 @@ function mapOpenrouter(raw: DecimalJsonValue): Table {
   return { models: out };
 }
 
+// --------------------------------------------------------------------------------- azure (Foundry)
+
+/**
+ * Azure writes one direction seven ways. ⚠️ **`opt` means OUTPUT** — 141 rows on 2026-08-01, and
+ * the pre-fix parser looked only for `outp`/`output`, so every GPT-5.x family had an input rate and
+ * no output rate. Proven by price: `GPT 5.1 inp Gl` 1.25/1M vs `GPT 5.1 opt Gl` 10.0/1M =
+ * GPT-5.1's published $1.25/$10.
+ */
+const AZ_DIRECTION: Record<string, 'input' | 'output'> = {
+  inp: 'input',
+  inpt: 'input',
+  input: 'input',
+  in: 'input',
+  outp: 'output',
+  outpt: 'output',
+  output: 'output',
+  out: 'output',
+  opt: 'output',
+};
+const AZ_CACHE_READ = new Set(['cd', 'cchd', 'ccchd', 'cached', 'cache']);
+const AZ_CACHE_WRITE = new Set(['wr']);
+/** Meters that are not a plain on-demand per-token inference rate: a different product, a different
+ * SLA, or not per-token at all. (`l` alone is the long-context tier — `4.3 Inp Glbl L` is 2x
+ * `4.3 Inp Glbl`.) */
+const AZ_NOT_INFERENCE = new Set([
+  'batch',
+  'ft',
+  'finetuned',
+  'training',
+  'trng',
+  'hosting',
+  'pp',
+  'ptu',
+  'provisioned',
+  'grader',
+  'grdr',
+  'img',
+  'image',
+  'aud',
+  'audio',
+  'rt',
+  'realtime',
+  'tts',
+  'trscb',
+  'tcrb',
+  'transcribe',
+  'ocr',
+  'doc',
+  'video',
+  'speech',
+  'shortco',
+  'longco',
+  'reservation',
+  'embedding',
+  'l',
+]);
+const AZ_TIER = new Set([
+  'gl',
+  'glbl',
+  'global',
+  'dz',
+  'dzone',
+  'datazone',
+  'dzn',
+  'regnl',
+  'regional',
+  'rgnl',
+  'regn',
+  'std',
+  'zone',
+  'data',
+  'mn',
+]);
+const AZ_PRODUCT_SKIP = new Set([
+  'Azure OpenAI Media',
+  'Azure BFL Flux Models',
+  'Managed Compute',
+  'Azure AI Foundry Provisioned Throughput Reservation',
+  'Azure OpenAI PP FT GPT4s',
+  'Azure OpenAI Embedding',
+]);
+/** `productName` → family root. A sku alone is ambiguous: `4.3 Inp Glbl` under *Azure Grok Models*
+ * is `grok-4.3` and `V4 Pro Inp glbl` under *Azure Deepseek Models* is `deepseek-v4-pro`.
+ * ⚠️ Applied only when the parsed head does not already start with the root — prefixing
+ * unconditionally turned `o1`/`o3`/`o4-mini` into `gpt-o1`/`gpt-o3`/`gpt-o4-mini`, a regression
+ * against the pre-fix mapper. *Azure OpenAI* and *Azure OpenAI Reasoning* carry full ids already. */
+const AZ_FAMILY_ROOT: Record<string, string> = {
+  'Azure OpenAI GPT5': 'gpt',
+  'Azure Grok Models': 'grok',
+  'Azure Deepseek Models': 'deepseek',
+  'Azure Kimi': 'kimi',
+  'Azure Llama Models': 'llama',
+  'Azure Mistral Models': 'mistral',
+  'Qwen models': 'qwen',
+  'Azure Phi Models': 'phi',
+  'MAI Models': 'mai',
+  'Azure OpenAI OSS Models': 'gpt-oss',
+};
+
+/** ⚠️ Read the unit **per row**: eastus2 mixes 905 `1K` meters with 479 `1M` ones in one response. */
 function azureUnitDivisor(unitOfMeasure: string): Decimal {
   const u = (unitOfMeasure || '').toUpperCase().replace(/ /g, '');
   if (u.includes('1M') || u.includes('1000000')) return new Dec(1_000_000);
@@ -381,58 +684,300 @@ function mapAzure(raw: DecimalJsonValue): Table {
   for (const item of items) {
     if (item === null || typeof item !== 'object' || Array.isArray(item)) continue;
     const it = item as RawObject;
-    const eff = String(it.effectiveStartDate ?? '').slice(0, 10);
-    if (eff.length === 10 && (latest === null || eff > latest)) latest = eff;
-    const sku = String(it.skuName ?? '');
-    const low = sku.toLowerCase();
-    let direction: 'input' | 'output';
-    if (low.includes('input') || low.includes(' inp') || low.endsWith('inp')) direction = 'input';
-    else if (low.includes('output') || low.includes('outp')) direction = 'output';
-    else continue;
-    const meterName = String(it.meterName ?? '').toLowerCase();
-    if (!low.includes('global') && `${low} ${meterName}`.includes('regional')) continue;
+    if (AZ_PRODUCT_SKIP.has(String(it.productName))) continue;
+    // Real Retail rows always carry a `type`; treat a missing one as Consumption so a hand-written
+    // fixture stays valid. Only `Reservation` rows are excluded — a committed capacity price is not
+    // a per-call rate.
+    if (String(it.type ?? 'Consumption') !== 'Consumption') continue;
+    const unit = String(it.unitOfMeasure ?? '')
+      .trim()
+      .toUpperCase();
+    if (unit !== '1K' && unit !== '1M') continue;
     const price = it.retailPrice;
-    if (price == null) continue;
-    const perToken = dec(price).dividedBy(azureUnitDivisor(String(it.unitOfMeasure ?? '')));
-    let head = low;
-    for (const cut of [' inp', ' input', ' outp', ' output']) {
-      if (head.includes(cut)) {
-        head = head.slice(0, head.indexOf(cut));
-        break;
+    if (price == null || !dec(price).greaterThan(0)) continue;
+    const words = String(it.skuName ?? '')
+      .toLowerCase()
+      .split(/[\s\-_]+/)
+      .filter(Boolean);
+    if (words.some((w) => AZ_NOT_INFERENCE.has(w))) continue;
+
+    let direction: 'input' | 'output' | null = null;
+    let cached = false;
+    let write = false;
+    const head: string[] = [];
+    for (const w of words) {
+      const d = AZ_DIRECTION[w];
+      if (d !== undefined) {
+        direction = d;
+        continue;
       }
+      if (AZ_CACHE_READ.has(w)) {
+        cached = true;
+        continue;
+      }
+      if (AZ_CACHE_WRITE.has(w)) {
+        write = true;
+        continue;
+      }
+      if (AZ_TIER.has(w)) continue;
+      if (direction === null) head.push(w);
     }
-    const words = head.trim().split(/\s+/).filter(Boolean);
+    if (direction === null) continue;
+    let key: string;
+    if (cached && direction === 'input') key = write ? 'cache_write' : 'cached';
+    else if (write)
+      continue; // a cache-write row we cannot place — skip rather than guess
+    else key = direction;
+
     while (
-      words.length &&
-      /^\d+$/.test(words[words.length - 1] as string) &&
-      [3, 4].includes((words[words.length - 1] as string).length)
+      head.length &&
+      /^\d+$/.test(head[head.length - 1] as string) &&
+      [3, 4, 8].includes((head[head.length - 1] as string).length)
     ) {
-      words.pop();
+      head.pop();
     }
-    const mid = normalizeModelId(words.join('-'));
+    if (!head.length) continue;
+    let mid = head.join('-');
+    const root = AZ_FAMILY_ROOT[String(it.productName)];
+    if (root !== undefined && !mid.startsWith(root)) mid = `${root}-${mid}`;
+    mid = normalizeModelId(mid);
+
+    const perToken = dec(price).dividedBy(azureUnitDivisor(String(it.unitOfMeasure ?? '')));
     let rates = byModel[mid];
     if (rates === undefined) {
       rates = {};
       byModel[mid] = rates;
     }
-    const existing = rates[direction];
-    if (existing === undefined || perToken.lessThan(existing)) rates[direction] = perToken;
+    const existing = rates[key];
+    if (existing === undefined || perToken.lessThan(existing)) rates[key] = perToken;
+
+    const eff = String(it.effectiveStartDate ?? '').slice(0, 10);
+    if (eff.length === 10 && (latest === null || eff > latest)) latest = eff;
   }
   const out: Record<string, Rates> = {};
   for (const [mid, r] of Object.entries(byModel)) if ('input' in r) out[mid] = r;
   const result: Table = { models: out };
+  // Carry Azure's real effectiveStartDate when present, else undatable — never fake "today", which
+  // would make a stale refresh look fresh to isStale().
   if (latest !== null) result._updated = latest;
   return result;
 }
 
-type Mapper = (raw: DecimalJsonValue) => Table;
-const SOURCES: Record<string, [string, Mapper]> = {
-  litellm: [LITELLM_URL, mapLitellm],
-  openrouter: [OPENROUTER_URL, mapOpenrouter],
-  azure: [AZURE_URL, mapAzure],
+// ------------------------------------------------------------------------------------ aws (Bedrock)
+
+/**
+ * ⚠️ usagetype fragments marking a different SLA or commitment — never the on-demand base rate.
+ * Measured 2026-08-01: `Claude Sonnet 4` carries `inferenceType: "Input tokens"` on **both**
+ * `…-input-tokens-cross-region-global` ($3/MTok) and `…-input-tokens-cross-region-global-batch`
+ * ($1.50/MTok), so a plain cheapest-wins over `inferenceType` publishes the batch price as the
+ * standard one.
+ */
+const AWS_NOT_ON_DEMAND = ['batch', 'long-context', 'reserved', 'priority', 'flex', 'provisioned'];
+const AWS_UNITS: Record<string, number> = {
+  '1k tokens': 1000,
+  '1k token': 1000,
+  '1m tokens': 1_000_000,
+  '1m token': 1_000_000,
 };
 
-/** Names of the built-in live price sources accepted by `refresh({ source })`. */
+/** Which rate a Bedrock price dimension is, from the `usagetype` first. ⚠️ `inferenceType` is not
+ * sufficient: the cache-write row carries `inferenceType: null`. */
+function awsRateKey(usagetype: unknown, inferenceType: unknown): string | null {
+  const u = String(usagetype ?? '').toLowerCase();
+  if (u.includes('cache-read')) return 'cached';
+  if (u.includes('cache-write')) return 'cache_write';
+  if (u.includes('input-token')) return 'input';
+  if (u.includes('output-token')) return 'output';
+  const it = String(inferenceType ?? '')
+    .trim()
+    .toLowerCase();
+  if (it === 'prompt cache read input tokens') return 'cached';
+  if (it === 'prompt cache write input tokens') return 'cache_write';
+  if (it === 'input tokens' || it === 'text input tokens' || it === 'text input token')
+    return 'input';
+  if (it === 'output tokens' || it === 'text output tokens' || it === 'text output token') {
+    return 'output';
+  }
+  return null;
+}
+
+/**
+ * Normalise an AWS `attributes.model` to the shape the lookup reduction produces.
+ *
+ * AWS names a model two ways in the same file: a **display name** with spaces (`Claude Sonnet 4.5`,
+ * `Llama 3.3 70B`) and a **wire-ish id** with none (`gpt-oss-120b`, `xai.grok-4.3`). A display name
+ * becomes what {@link lookupId} yields from a Bedrock wire id
+ * (`us.anthropic.claude-sonnet-4-5-…-v1:0` → `claude-sonnet-4-5`).
+ *
+ * Honest limit: a wire id carrying a suffix the display name lacks (`llama3-3-70b-instruct`) will
+ * not match — and is never guessed at.
+ */
+export function awsModelKey(name: string): string {
+  const s = String(name).trim();
+  if (!s.includes(' ')) return s.toLowerCase().replace(/^(?:[a-z0-9]+\.)+/, '');
+  return s
+    .toLowerCase()
+    .replace(/(?<=\d)\.(?=\d)/g, '-')
+    .replace(/[\s_]+/g, '-');
+}
+
+/** AWS Bedrock price files as fetched by {@link fetchAws} → `{ offers: [file, ...] }`. */
+function mapAws(raw: DecimalJsonValue): Table {
+  const byModel: Record<string, Rates> = {};
+  let published: string | null = null;
+  const offers = (raw as RawObject).offers;
+  if (!Array.isArray(offers)) return { models: {} };
+  for (const file of offers) {
+    if (file === null || typeof file !== 'object' || Array.isArray(file)) continue;
+    const data = file as RawObject;
+    const p = String(data.publicationDate ?? '').slice(0, 10);
+    if (p.length === 10 && (published === null || p > published)) published = p;
+    const terms = ((data.terms as RawObject | undefined)?.OnDemand ?? {}) as RawObject;
+    const products = (data.products ?? {}) as RawObject;
+    for (const [sku, product] of Object.entries(products)) {
+      if (product === null || typeof product !== 'object' || Array.isArray(product)) continue;
+      const attrs = ((product as RawObject).attributes ?? {}) as RawObject;
+      if (!attrs.model) continue;
+      const usagetype = String(attrs.usagetype ?? '').toLowerCase();
+      if (AWS_NOT_ON_DEMAND.some((frag) => usagetype.includes(frag))) continue;
+      const key = awsRateKey(attrs.usagetype, attrs.inferenceType);
+      if (key === null) continue;
+      const skuTerms = (terms[sku] ?? {}) as RawObject;
+      for (const term of Object.values(skuTerms)) {
+        if (term === null || typeof term !== 'object' || Array.isArray(term)) continue;
+        const dims = ((term as RawObject).priceDimensions ?? {}) as RawObject;
+        for (const pd of Object.values(dims)) {
+          if (pd === null || typeof pd !== 'object' || Array.isArray(pd)) continue;
+          const dim = pd as RawObject;
+          const divisor =
+            AWS_UNITS[
+              String(dim.unit ?? '')
+                .trim()
+                .toLowerCase()
+            ];
+          if (divisor === undefined) continue; // image / hour / TPM-Hour — not a token rate
+          const usd = ((dim.pricePerUnit ?? {}) as RawObject).USD;
+          if (usd == null) continue;
+          const value = dec(usd).dividedBy(divisor);
+          if (!value.greaterThan(0)) continue;
+          const mid = awsModelKey(String(attrs.model));
+          let rates = byModel[mid];
+          if (rates === undefined) {
+            rates = {};
+            byModel[mid] = rates;
+          }
+          const existing = rates[key];
+          if (existing === undefined || value.lessThan(existing)) rates[key] = value;
+        }
+      }
+    }
+  }
+  const out: Record<string, Rates> = {};
+  for (const [mid, r] of Object.entries(byModel)) if ('input' in r) out[mid] = r;
+  const result: Table = { models: out };
+  if (published !== null) result._updated = published;
+  return result;
+}
+
+// ----------------------------------------------------------------------------------- source registry
+
+type Mapper = (raw: DecimalJsonValue) => Table;
+type Fetcher = (url: string, timeout: number, region?: string) => Promise<DecimalJsonValue>;
+
+/**
+ * One unauthenticated HTTPS GET → parsed JSON with `Decimal` numbers.
+ *
+ * ⚠️ Never gates on the HTTP status or the content-type, because neither is a signal here. Measured
+ * 2026-08-01: Azure answers a wrong `$filter` with **200 + `{"Items": []}`**, models.dev answers a
+ * wrong path with **200 + `text/html`**, Vercel answers a wrong path with **404 + valid JSON**, AWS
+ * serves its *good* index files as `application/octet-stream`, and raw.githubusercontent serves the
+ * feed as `text/plain`. Parse, then check shape.
+ */
+async function getJson(url: string, timeout: number): Promise<DecimalJsonValue> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout * 1000);
+  try {
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': '@cendor/core prices' },
+    });
+    return parseDecimalJson(await resp.text());
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const fetchSimple: Fetcher = (url, timeout) => getJson(url, timeout);
+
+/** Paginate the Retail Prices API. Two pages for one region; capped so a filter that somehow
+ * matches everything cannot turn one `refresh()` into an unbounded crawl. */
+const fetchAzure: Fetcher = async (url, timeout) => {
+  const items: DecimalJsonValue[] = [];
+  let next: string | undefined = url;
+  let pages = 0;
+  while (next && pages < 10) {
+    const payload = (await getJson(next, timeout)) as RawObject;
+    if (Array.isArray(payload.Items)) items.push(...payload.Items);
+    pages += 1;
+    next = typeof payload.NextPageLink === 'string' ? payload.NextPageLink : undefined;
+  }
+  return { Items: items };
+};
+
+/** Resolve each offer's region index, then fetch that region's file. Both offers, always. */
+const fetchAws: Fetcher = async (_url, timeout, region) => {
+  const reg = region || AWS_DEFAULT_REGION;
+  const offers: DecimalJsonValue[] = [];
+  for (const offer of AWS_OFFERS) {
+    const index = (await getJson(
+      `${AWS_PRICING_HOST}/offers/v1.0/aws/${offer}/current/region_index.json`,
+      timeout,
+    )) as RawObject;
+    const regions = (index.regions ?? {}) as RawObject;
+    const entry = regions[reg] as RawObject | undefined;
+    const href = String(entry?.currentVersionUrl ?? '');
+    // A region one offer does not publish is not a failure of the other.
+    if (!href) continue;
+    offers.push(await getJson(href.startsWith('http') ? href : AWS_PRICING_HOST + href, timeout));
+  }
+  return { offers };
+};
+
+interface Source {
+  url: string | ((region?: string) => string);
+  mapper: Mapper;
+  fetch: Fetcher;
+}
+
+/**
+ * Built-in live sources, all unauthenticated HTTPS GET → JSON. `azure` and `aws` are the providers'
+ * own billing catalogs (first-party facts); `modelsdev` and `litellm` are MIT aggregators;
+ * `openrouter` and `vercel` are gateways quoting their own **resale** prices.
+ */
+const SOURCES: Record<string, Source> = {
+  litellm: { url: LITELLM_URL, mapper: mapLitellm, fetch: fetchSimple },
+  openrouter: { url: OPENROUTER_URL, mapper: mapOpenrouter, fetch: fetchSimple },
+  modelsdev: { url: MODELSDEV_URL, mapper: mapModelsdev, fetch: fetchSimple },
+  vercel: { url: VERCEL_URL, mapper: mapVercel, fetch: fetchSimple },
+  azure: {
+    url: (region) => azureUrl(region ?? AZURE_DEFAULT_REGION),
+    mapper: mapAzure,
+    fetch: fetchAzure,
+  },
+  aws: { url: AWS_URL, mapper: mapAws, fetch: fetchAws },
+};
+
+/**
+ * Names of the built-in live price sources accepted by `refresh(undefined, { source })`:
+ * `['aws', 'azure', 'litellm', 'modelsdev', 'openrouter', 'vercel']`. `azure` and `aws` also accept
+ * a `region`.
+ *
+ * @example
+ * ```ts
+ * import { prices } from '@cendor/core';
+ * await prices.refresh(undefined, { source: 'aws', region: 'eu-west-1' });
+ * ```
+ */
 export function sources(): string[] {
   return Object.keys(SOURCES).sort();
 }
@@ -441,54 +986,342 @@ export interface RefreshOptions {
   source?: string;
   mapper?: Mapper;
   timeout?: number;
+  /** Cloud region for the `azure` / `aws` sources. Ignored by the others. */
+  region?: string;
+  /** `true` throws {@link PriceRefreshError} instead of resolving `false`. Never the default. */
+  required?: boolean;
 }
 
 /**
- * Replace the table from a live source or static JSON URL. Never throws; offline-safe. Returns `true`
- * if the table was updated, `false` if the fetch/parse/map failed (the current table stays active).
- * Mirrors `cendor.core.prices.refresh` (async here: uses `fetch`).
+ * Replace the table from a live source or static JSON URL. Never throws; offline-safe.
+ *
+ * With no arguments this fetches the **cendor-prices feed** ({@link SNAPSHOT_URL}) — a dated,
+ * per-row-provenanced table reconciled from the cloud catalogs and the MIT aggregators. Resolves
+ * `true` if the table was updated, `false` if the fetch/parse/map failed (the current table stays
+ * active — a failure never reverts anything). Mirrors `cendor.core.prices.refresh`; **async here**,
+ * synchronous in Python (a documented divergence: `fetch` vs `urllib`).
+ *
+ * @throws {@link PriceRefreshError} only when `required: true`.
+ *
+ * @example
+ * ```ts
+ * import { prices } from '@cendor/core';
+ * await prices.refresh();                                              // the cendor-prices feed
+ * await prices.refresh(undefined, { source: 'aws', region: 'eu-west-1' });
+ * await prices.refresh(undefined, { required: true });                 // loud instead of silent
+ * ```
  */
 export async function refresh(url?: string, opts: RefreshOptions = {}): Promise<boolean> {
-  const { source: sourceArg, mapper, timeout = 5.0 } = opts;
+  const { source: sourceArg, mapper, timeout = 5.0, region, required = false } = opts;
   let target: string;
   let adapter: Mapper | undefined;
+  let fetcher: Fetcher = fetchSimple;
   let name: string;
   if (sourceArg != null) {
     const entry = SOURCES[sourceArg];
-    if (entry === undefined) return false;
-    target = entry[0];
-    adapter = mapper ?? entry[1];
+    if (entry === undefined) {
+      if (required) {
+        throw new PriceRefreshError(
+          `unknown price source ${JSON.stringify(sourceArg)}; expected one of ${sources().join(', ')}`,
+        );
+      }
+      return false;
+    }
+    target = typeof entry.url === 'function' ? entry.url(region) : entry.url;
+    adapter = mapper ?? entry.mapper;
+    fetcher = entry.fetch;
     name = sourceArg;
   } else {
     target = url || SNAPSHOT_URL;
     adapter = mapper;
-    name = url ? 'custom' : 'default';
+    name = url ? 'custom' : 'feed';
   }
-  if (!target || !/^https?:\/\//i.test(target)) return false;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout * 1000);
-    let text: string;
-    try {
-      const resp = await fetch(target, { signal: controller.signal });
-      text = await resp.text();
-    } finally {
-      clearTimeout(timer);
+  if (!target || !/^https?:\/\//i.test(target)) {
+    if (required) {
+      throw new PriceRefreshError(
+        `price source must be an http(s) URL, got ${JSON.stringify(target)}`,
+      );
     }
-    const raw = parseDecimalJson(text);
+    return false;
+  }
+  const detail = 'the source returned no models (a wrong filter or a changed shape answers 200)';
+  try {
+    const raw = await fetcher(target, timeout, region);
     const data = adapter ? adapter(raw) : (raw as unknown as Table);
     if (data && typeof data === 'object' && data.models && Object.keys(data.models).length > 0) {
-      Object.assign(data.models, registered); // programmatic registrations survive a refresh
-      table = data;
-      sourceKind = 'refreshed';
-      sourceNameValue = name;
-      sourceUrlValue = target;
+      install(data, 'refreshed', name, target);
       return true;
     }
+  } catch (e) {
+    if (required) {
+      throw new PriceRefreshError(
+        `price refresh from ${JSON.stringify(target)} failed: ${(e as Error).message}`,
+      );
+    }
+    return false;
+  }
+  if (required)
+    throw new PriceRefreshError(`price refresh from ${JSON.stringify(target)} failed: ${detail}`);
+  return false;
+}
+
+function install(data: Table, kind: string, name: string, url: string | null): void {
+  if (!data.models) data.models = {};
+  coerceRates(data.models);
+  Object.assign(data.models, registered); // programmatic registrations survive every table swap
+  table = data;
+  sourceKind = kind;
+  sourceNameValue = name;
+  sourceUrlValue = url;
+}
+
+/**
+ * Force every rate in a swapped-in table to a `Decimal`, in place.
+ *
+ * ⚠️ Measured 2026-08-01. A **pass-through** `refresh(url)` — no mapper, the caller pointing at any
+ * `prices/1` JSON — hands the parsed rate objects straight to `estimate()`. `parseDecimalJson`
+ * turns a JSON *number* into a `Decimal` but leaves a JSON *string* a string, so a table that
+ * quotes its rates (`"input": "0.0000025"`, a perfectly reasonable authoring choice) made
+ * `estimate()` throw `inputRate.times is not a function` and `explain().summary()` throw
+ * `toFixed is not a function`. Python never showed it because its `estimate` already coerced with
+ * `Decimal(str(...))`. This is the TS side of that same defensiveness, applied once at the swap
+ * rather than on every read.
+ */
+function coerceRates(models: Record<string, Rates>): void {
+  for (const rates of Object.values(models)) {
+    if (rates === null || typeof rates !== 'object') continue;
+    for (const [k, v] of Object.entries(rates)) {
+      if (!(v instanceof Dec)) rates[k] = dec(v as unknown as DecimalJsonValue);
+    }
+  }
+}
+
+// ----------------------------------------------------------------------------- explain / save / load
+
+/**
+ * Where one model's rates came from — the answer to *"why is my cost that number?"*.
+ *
+ * Field names are camelCase here and snake_case in `cendor.core.prices.PriceExplanation` (the same
+ * documented divergence as `snapshotDate` / `snapshot_date`).
+ */
+export interface PriceExplanation {
+  /** The id you asked about, verbatim. */
+  model: string;
+  /** The table key that answered, or `null` if nothing did. */
+  resolved: string | null;
+  /**
+   * `'registered'` — your own `register*` call is in effect (it overrides every table).
+   * `'exact'` — the id is a table key. `'normalized'` — a wire-level id was reduced to its base.
+   * `'unpriced'` — no rate exists, and `estimate()` would throw.
+   */
+  how: 'exact' | 'normalized' | 'registered' | 'unpriced';
+  /** Per-token USD rates, or `null` when unpriced. */
+  rates: Rates | null;
+  registered: boolean;
+  /** Provenance of the whole table: `'bundled'` | `'feed'` | `'azure'` | … */
+  sourceName: string;
+  sourceUrl: string | null;
+  /** `'bundled'` | `'refreshed'` | `'loaded'`. */
+  tableOrigin: string;
+  snapshotDate: string | null;
+  ageDays: number | null;
+  /** Per-row provenance from the feed's `_provenance` map: which source this rate came from. */
+  rowSource: string | null;
+  /** That source's own as-of date for this rate — not the day it was fetched. */
+  rowAsof: string | null;
+  /** Honest caveats that apply to this answer (resale pricing, staleness, …). */
+  notes: string[];
+  /** One human-readable line, for a log or a CLI. */
+  summary(): string;
+}
+
+/** Sources whose numbers are what a **gateway** charges for reselling a model, not what the lab
+ * charges. Surfaced by {@link explain} rather than buried in the docs. */
+const RESALE_SOURCES = new Set(['openrouter', 'vercel']);
+
+/**
+ * Explain where `model`'s rates come from: the resolved id, the rates, and the provenance.
+ *
+ * The visibility half of *"if the live price is wrong, the user can overwrite it"*: an override
+ * already wins ({@link register}), and this shows whether one is in effect, which table answered,
+ * which source that row came from, and how old it is. Never throws — an unpriced model is an
+ * answer, not an error.
+ *
+ * @example
+ * ```ts
+ * import { prices } from '@cendor/core';
+ * await prices.refresh();
+ * console.log(prices.explain('gpt-4o').summary());
+ * ```
+ */
+export function explain(model: string): PriceExplanation {
+  const t = ensureLoaded();
+  const models = t.models ?? {};
+  const mid = String(model);
+  let resolved: string | null = null;
+  let how: PriceExplanation['how'] = 'unpriced';
+  if (models[mid] !== undefined) {
+    resolved = mid;
+    how = 'exact';
+  } else {
+    const reduced = lookupId(mid);
+    if (models[reduced] !== undefined) {
+      resolved = reduced;
+      how = 'normalized';
+    }
+  }
+  const isRegistered = resolved !== null && registered[resolved] !== undefined;
+  if (isRegistered) how = 'registered';
+  const rates = resolved !== null ? { ...(models[resolved] as Rates) } : null;
+  const row = resolved !== null ? t._provenance?.[resolved] : undefined;
+  const notes: string[] = [];
+  if (isRegistered) {
+    notes.push(
+      'a register()/registerModelPrice()/registerDeployment() call overrides every table for this id, including after a refresh()',
+    );
+  }
+  if (RESALE_SOURCES.has(sourceNameValue)) {
+    notes.push(
+      `${sourceNameValue} publishes gateway RESALE prices — what the gateway charges you, which may differ from the model lab's own rate`,
+    );
+  }
+  const age = ageDays();
+  if (age !== null && age > 45) {
+    notes.push(`this table is ${age} days old; call refresh() for current rates`);
+  }
+  if (snapshotDate() === null) {
+    notes.push(
+      'this source publishes no as-of date, so staleness cannot be measured (isStale() reports false, which means unknown, not fresh)',
+    );
+  }
+  if (how === 'unpriced') {
+    notes.push(
+      'estimate() throws UnknownModelError and tokenguard records $0 — register a rate with prices.registerModelPrice(...) or prices.registerDeployment(...)',
+    );
+  }
+  const name = sourceNameValue;
+  const snap = snapshotDate();
+  return {
+    model: mid,
+    resolved,
+    how,
+    rates,
+    registered: isRegistered,
+    sourceName: name,
+    sourceUrl: sourceUrlValue,
+    tableOrigin: sourceKind,
+    snapshotDate: snap,
+    ageDays: age,
+    rowSource: row?.src ?? null,
+    rowAsof: row?.asof ?? null,
+    notes,
+    summary(): string {
+      if (this.rates === null) {
+        return `${this.model}: no price in the ${name} table — cost will be null`;
+      }
+      const r = Object.keys(this.rates)
+        .sort()
+        .map((k) => `${k}=${(this.rates as Rates)[k]?.toFixed()}`)
+        .join(' ');
+      const via = this.resolved === this.model ? '' : ` (via ${this.resolved})`;
+      const prov = this.rowSource ?? name;
+      const asof = this.rowAsof ?? snap ?? 'undated';
+      return `${this.model}${via}: ${r} — ${this.how}, from ${prov} as of ${asof}`;
+    },
+  };
+}
+
+/**
+ * Write the **active** table to `path` so a later process can {@link load} it. Opt-in.
+ *
+ * `refresh()` is in-memory only, per process: a short-lived or serverless worker starts at the
+ * bundled snapshot every time. This is the explicit escape hatch — a path *you* choose, written
+ * when *you* ask. There is deliberately **no implicit cache**: a library quietly writing price
+ * files is a side effect, and a hidden cache is exactly how prices go *invisibly* stale.
+ *
+ * Provenance rides along, so `explain()` and `ageDays()` stay honest after a `load()` — the saved
+ * file records the original source and its `_updated`, never the moment you saved.
+ *
+ * Node/Bun/Deno only (it needs a filesystem); `node:fs/promises` is imported dynamically so a
+ * browser or Worker bundle never pulls it in.
+ *
+ * @example
+ * ```ts
+ * import { prices } from '@cendor/core';
+ * await prices.refresh();
+ * await prices.save('.cache/cendor-prices.json');   // in your deploy step
+ * // ... a later process:
+ * await prices.load('.cache/cendor-prices.json');   // no network
+ * ```
+ */
+export async function save(path: string): Promise<string> {
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const { dirname } = await import('node:path');
+  const t = ensureLoaded();
+  const models: Record<string, Record<string, string>> = {};
+  for (const [k, v] of Object.entries(t.models ?? {})) {
+    const r: Record<string, string> = {};
+    // `toFixed()`, not `toString()`: toString renders 1.23e-7 in exponent form. Both round-trip
+    // exactly, but a plain decimal literal is what the price-dataset spec and the cendor-prices
+    // feed use, so a saved file is diffable against them.
+    for (const [kk, vv] of Object.entries(v)) r[kk] = vv.toFixed();
+    models[k] = r;
+  }
+  const payload: Record<string, unknown> = {
+    _note: 'Saved by @cendor/core prices.save(). Restore with prices.load(path).',
+    _schema: 'prices/1',
+    _saved: { source_name: sourceNameValue, source_url: sourceUrlValue, origin: sourceKind },
+    models,
+  };
+  if (t._updated) payload._updated = t._updated;
+  if (t._provenance) payload._provenance = t._provenance;
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(payload, null, 1)}\n`, 'utf8');
+  return path;
+}
+
+/**
+ * Load a table previously written by {@link save}. Opt-in, explicit, no network.
+ *
+ * Registrations are re-applied on top exactly as after a `refresh()`, and the file's recorded
+ * source name / URL / `_updated` are restored so {@link explain} and {@link ageDays} describe where
+ * the rates *came from*, not where they were read from. `source()` then reports `'loaded'`.
+ * Resolves `false` if the file was missing, unreadable or empty — the same never-throw,
+ * keep-the-last-good contract as `refresh()`.
+ *
+ * @example
+ * ```ts
+ * import { prices } from '@cendor/core';
+ * if (!(await prices.load('.cache/cendor-prices.json'))) await prices.refresh();
+ * ```
+ */
+export async function load(path: string): Promise<boolean> {
+  let text: string;
+  try {
+    const { readFile } = await import('node:fs/promises');
+    text = await readFile(path, 'utf8');
   } catch {
     return false;
   }
-  return false;
+  let data: Table;
+  try {
+    data = parseDecimalJson(text) as unknown as Table;
+  } catch {
+    return false;
+  }
+  if (!data || typeof data !== 'object' || !data.models || !Object.keys(data.models).length) {
+    return false;
+  }
+  // `save()` writes rates as strings (a plain decimal literal, diffable against the feed);
+  // `install()`'s coerceRates turns them back into Decimals — a Decimal table is the contract, and
+  // `explain()` hands rates straight to callers.
+  install(
+    data,
+    'loaded',
+    String(data._saved?.source_name ?? 'custom'),
+    data._saved?.source_url ?? null,
+  );
+  return true;
 }
 
 /** Test helper: drop the loaded table (and registrations) so the bundled snapshot reloads. */
