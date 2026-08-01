@@ -18,7 +18,13 @@ importers:
       '@changesets/cli':
         specifier: ^2.31.1
         version: 2.31.1(@types/node@22.20.1)
+      '@opentelemetry/api':
+        specifier: ^1.9.0
+        version: 1.9.1
       '@opentelemetry/context-async-hooks':
+        specifier: ^2.1.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-metrics':
         specifier: ^2.1.0
         version: 2.10.0(@opentelemetry/api@1.9.1)
       '@types/better-sqlite3':

@@ -341,6 +341,11 @@ function emitCompression(
   model: string,
   handleId: string,
 ): void {
+  // Skipped entirely when nothing is subscribed — including the two `tokens.count` passes that
+  // fill the event, which dominate a large compress() (measured ~93% on a 90 KB payload). An event
+  // with no subscriber is unobservable by definition; anything attached (an AuditLog, a monitor
+  // exporter) makes the counts a bought cost rather than a wasted one.
+  if (!bus.hasSubscribers()) return;
   const before = tokens.count(original, model);
   const after = tokens.count(small, model);
   bus.emit(
@@ -357,9 +362,34 @@ function emitCompression(
   );
 }
 
-/** Restore the original content for a handle (same as `handle.expand()`). */
-export function decompress(handle: Handle): string {
-  return handle.expand();
+/**
+ * Restore the original content for a handle (same as `handle.expand()`).
+ *
+ * Accepts any handle that can expand — **not just squeeze's own {@link Handle}** — because the one
+ * you are most likely to be holding came from somewhere else. `contextkit`'s `BlockDecision.handle`
+ * is typed as core's `Compressor` PROTOCOL handle (`{ expand(): unknown }`), deliberately the
+ * smallest thing contextkit needs to know about a backend. Narrowing this parameter to squeeze's
+ * concrete class made the obvious line —
+ *
+ * ```ts
+ * const cut = ctx.report().decisions.find((d) => d.action === 'compressed');
+ * decompress(cut.handle);
+ * ```
+ *
+ * — a compile error, on identical runtime objects. (Python never had this: there
+ * `BlockDecision.handle` is `Any`.) Pinned by `type-tests/protocol-handle.ts`.
+ *
+ * @example
+ * ```ts
+ * import { compress, decompress } from '@cendor/squeeze';
+ * const [small, handle] = compress('a long prose block…', { kind: 'prose', targetTokens: 256 });
+ * const original = decompress(handle);   // byte-for-byte
+ * ```
+ */
+export function decompress(handle: Handle | { expand(): unknown }): string {
+  // Every handle squeeze itself produces expands to a string; a foreign protocol handle that does
+  // not is a caller error, and `String()` would silently paper over it.
+  return handle.expand() as string;
 }
 
 /** Options for {@link SqueezeCompressor.compress} (matches core's `Compressor` protocol shape). */

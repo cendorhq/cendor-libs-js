@@ -22,6 +22,16 @@ describe('bus', () => {
     expect(a).toHaveBeenCalledTimes(1);
   });
 
+  it('hasSubscribers tracks registration (public accessor, not the test helper)', () => {
+    // Lets an emitter skip building an expensive event nobody would receive — squeeze gates its
+    // CompressionEvent token counts on it.
+    expect(bus.hasSubscribers()).toBe(false);
+    const fn = bus.subscribe(() => {});
+    expect(bus.hasSubscribers()).toBe(true);
+    bus.unsubscribe(fn);
+    expect(bus.hasSubscribers()).toBe(false);
+  });
+
   it('unsubscribe removes a subscriber', () => {
     const a = vi.fn();
     bus.subscribe(a);

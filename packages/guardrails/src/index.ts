@@ -127,7 +127,10 @@ let decisionsCounterChecked = false;
  */
 export function useMeter(
   meter: {
-    createCounter(name: string): { add: (v: number, a: Record<string, unknown>) => void };
+    // `add` is a METHOD, not a property holding a function — a property's parameters are checked
+    // contravariantly, which made a REAL OTel `Meter` unassignable here. See the note on
+    // tokenguard's `Counter` and `type-tests/injected-otel-meter.ts`.
+    createCounter(name: string): { add(v: number, a?: Record<string, unknown>): void };
   } | null,
 ): void {
   if (meter == null) {

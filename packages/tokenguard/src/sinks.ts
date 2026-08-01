@@ -300,7 +300,15 @@ export interface OTelSinkOptions {
   meter?: { createCounter(name: string): Counter } | null;
 }
 
-type Counter = { add: (value: number, attrs: Record<string, unknown>) => void };
+/**
+ * A counter this sink writes to. `add` is declared as a METHOD, not as a property holding a
+ * function, and that is load-bearing: a property's parameters are checked CONTRAVARIANTLY under
+ * `strictFunctionTypes`, so `Record<string, unknown>` would not accept OTel's `Attributes` and a
+ * REAL `Meter` could not be passed to {@link OTelSinkOptions.meter} without a cast — on a feature
+ * that exists purely to let a caller inject their own meter. Method syntax is bivariant, which is
+ * what makes the documented call compile. Pinned by `type-tests/injected-otel-meter.ts`.
+ */
+type Counter = { add(value: number, attrs?: Record<string, unknown>): void };
 
 /** Is this a no-op instrument/provider (the JS metrics API has no proxy — see `ensureCounters`)? */
 function isNoop(x: unknown): boolean {

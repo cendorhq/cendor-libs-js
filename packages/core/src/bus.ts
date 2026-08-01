@@ -45,6 +45,24 @@ export function emit(event: unknown): void {
 }
 
 /**
+ * `true` when at least one subscriber is registered.
+ *
+ * Lets an emitter skip *building* an expensive event nobody would receive — `@cendor/squeeze` uses
+ * it to skip the two `tokens.count` passes that fill its `CompressionEvent` when nothing is
+ * listening (measured at ~93% of a large `compress()`). It answers "is anyone on the bus", not
+ * "is anyone listening for *this* event type".
+ *
+ * @example
+ * ```ts
+ * import { bus } from '@cendor/core';
+ * if (bus.hasSubscribers()) bus.emit({ kind: 'my.expensive.event' });
+ * ```
+ */
+export function hasSubscribers(): boolean {
+  return subscribers.length > 0;
+}
+
+/**
  * Test helper: how many subscribers are registered. Used by the local-first pins — with OTel absent,
  * auto-wiring must subscribe **nothing** (zero added bus cost), and a manual attachment plus the auto
  * one must never both be subscribed.
