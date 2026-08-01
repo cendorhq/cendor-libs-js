@@ -1,5 +1,52 @@
 # @cendor/squeeze
 
+## 3.1.0
+
+### Minor Changes
+
+- 0a08e89: `decompress()` now accepts any handle that can expand, not just squeeze's own `Handle`.
+
+  The handle you are most likely to be holding did not come from `compress()` — it came from
+  `contextkit`, whose `BlockDecision.handle` is typed as core's `Compressor` **protocol** handle
+  (`{ expand(): unknown }`), deliberately the smallest thing contextkit needs to know about whatever
+  backend was registered. Narrowing this parameter to squeeze's concrete class made the obvious line a
+  compile error on objects that are identical at runtime:
+
+  ```ts
+  const cut = ctx.report().decisions.find((d) => d.action === "compressed");
+  decompress(cut.handle); // ✗ before — core's Handle is missing id, kind, originalRef, restoreMap…
+  ```
+
+  Widening the parameter is backward compatible: squeeze's own `Handle` still satisfies it, and
+  `.expand()` remains the equivalent protocol-pure call. Python never had this — there
+  `BlockDecision.handle` is `Any`.
+
+  Pinned by `type-tests/protocol-handle.ts`, which covers the concrete handle, a bare protocol handle,
+  and the real contextkit → squeeze path.
+
+### Patch Changes
+
+- 0a08e89: `compress()` stops paying for a `CompressionEvent` nobody is listening to.
+
+  Since the event shipped, every `compress()` ran `tokens.count` twice — over the original _and_ the
+  compressed text — to fill the metadata-only event **before** `bus.emit`, whether or not anything was
+  subscribed. Measured on a ~78 KB JSON payload with zero subscribers: the two counts were **~88–96%
+  of the whole call**, and tokenizing is linear in payload size, so every large compress paid it
+  (including `contextkit`'s `evict: "compress"` path, per block).
+
+  `emitCompression` now returns before any counting when `bus.hasSubscribers()` (new in
+  `@cendor/core` 3.5.0) is false. An event with no subscriber is unobservable, so nothing observable
+  changes; with anything attached — an acttrace `AuditLog`, a monitor exporter — the event is emitted
+  exactly as before: same fields, same counts, same duck-typed `compression` audit entry. Honest
+  limit: the check is "is anyone on the bus", so an app with tokenguard armed still computes the
+  counts — that is the cost of visibility, now paid only when something can see it.
+
+  Pinned both ways by `test/compression-event-cost.test.ts`: zero `tokens.count` calls with zero
+  subscribers; exactly two, with correct `tokens_before`/`tokens_after`/`ratio`, with one.
+
+- Updated dependencies [0a08e89]
+  - @cendor/core@3.5.0
+
 ## 3.0.0
 
 ### Major Changes
@@ -14,7 +61,7 @@
   `npm i @cendor/libs@latest`.
 
   These libraries cooperate through a single in-process event bus in `@cendor/core`. If two of them
-  resolve *different* copies of core, that is two buses and cooperation stops silently — a guardrail
+  resolve _different_ copies of core, that is two buses and cooperation stops silently — a guardrail
   decision never reaches the code listening for it, with nothing failing to say so. A shared major
   makes an incoherent set obvious at a glance rather than at runtime, and a caret spanning the whole
   major keeps the resolver on one copy.
