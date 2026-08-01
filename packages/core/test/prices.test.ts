@@ -52,8 +52,18 @@ describe('prices — cross-language conformance (prices/1)', () => {
     );
   });
 
-  it('llama3 zero rates cost nothing', () => {
-    expect(prices.estimate('llama3', 1000, { outputTokens: 1000 }).amount.isZero()).toBe(true);
+  it('a zero INPUT rate is not in the snapshot at all, but a zero OUTPUT rate is', () => {
+    // The generated snapshot drops any model whose input rate would be 0 — `estimate()` would
+    // otherwise report $0.00 as a FACT and a USD `budget(...)` cap would silently never bind on it.
+    // `llama3` (0/0 in the old hand-fed table) is gone; embeddings, which genuinely have a zero
+    // output rate, are not.
+    expect(prices.models()).not.toContain('llama3');
+    expect(() => prices.estimate('llama3', 1000)).toThrow(UnknownModelError);
+    expect(
+      prices
+        .estimate('text-embedding-3-small', 1000, { outputTokens: 1000 })
+        .amount.equals(new Dec('0.00002')),
+    ).toBe(true);
   });
 
   it('lookup normalizes wire-level ids (Bedrock prefixes, -vN:0, date suffixes)', () => {

@@ -45,7 +45,11 @@ def gen_prices() -> None:
         {"model": "gpt-5.6-terra", "input": 1000, "output": 500, "cached": 200},
         {"model": "grok-4.3", "input": 500, "output": 500},  # no cached rate
         {"model": "o3", "input": 3000, "output": 900},
-        {"model": "llama3", "input": 1000, "output": 1000},  # zero rates
+        # `llama3` used to sit here at 0/0. The generated snapshot no longer publishes a
+        # zero INPUT rate at all — estimate() would report $0.00 as a fact and a USD cap
+        # would silently never bind. A zero OUTPUT rate is still real, so an embedding row
+        # takes its place.
+        {"model": "text-embedding-3-small", "input": 1000, "output": 0},
         {"model": "gpt-4-turbo", "input": 777, "output": 333, "cache_write": 50},  # no cache_write rate
     ]
     out = []

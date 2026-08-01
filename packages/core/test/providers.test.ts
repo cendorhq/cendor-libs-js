@@ -84,7 +84,7 @@ describe('instrument() — provider breadth', () => {
     expect(c.cost).not.toBeNull(); // gemini-2.5-pro is in the snapshot
   });
 
-  it('Ollama: chat() callable detected, top-level counts read, local model priced at 0', async () => {
+  it('Ollama: chat() callable detected, top-level counts read, local model is UNPRICED', async () => {
     const client = {
       chat: async (_p: unknown) => ({ prompt_eval_count: 7, eval_count: 5 }),
     };
@@ -94,7 +94,12 @@ describe('instrument() — provider breadth', () => {
     expect(c.provider).toBe('ollama');
     expect(c.usage?.inputTokens).toBe(7);
     expect(c.usage?.outputTokens).toBe(5);
-    expect(c.cost?.amount.toString()).toBe('0'); // local model priced at 0
+    // A local model has no LIST price, so cost is null — not $0.00. `llama3` used to sit in the
+    // hand-fed snapshot at 0/0 (inherited from litellm), which made exactly one local model report
+    // a fabricated $0.00 while every other one reported null. The generated snapshot publishes no
+    // zero input rate at all. To cost your local runs, say so:
+    // `prices.register('llama3', { input: 0, output: 0 })`.
+    expect(c.cost).toBeNull();
   });
 
   it('HuggingFace: chatCompletion() detected first and attributed to "huggingface"', async () => {

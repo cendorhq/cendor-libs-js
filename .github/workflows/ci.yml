@@ -32,6 +32,12 @@ jobs:
         run: pnpm build
       - name: Type Teach regression (decoy overloads still error)
         run: pnpm check:types
+      # `prices-snapshot.ts` is GENERATED from the sibling Python snapshot, which CI does not clone.
+      # `--verify` validates the committed file on its own: it parses, it is datable, and no model
+      # carries a zero input rate. Without this the snapshot reaches consumers having passed no
+      # gate in this repo at all.
+      - name: price snapshot
+        run: node scripts/sync-prices.mjs --verify
       - name: Lint
         run: pnpm lint
       # A MAJOR is irreversible on npm and re-frames the product for every reader. It is never an
