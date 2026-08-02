@@ -482,6 +482,41 @@ describe('modelsdev / vercel / litellm', () => {
     expect(prices.snapshotDate()).toBe('2026-07-20'); // per-row last_updated, real provenance
   });
 
+  it('modelsdev: the LAB beats a host when BOTH key the model bare', async () => {
+    // ⚠️ THE PRECEDENCE INVERSION, measured 2026-08-02 on the live payload. The `bare` guard was a
+    // plain `if (bare.has(key)) continue`, which inverted the allowlist whenever two ALLOWLISTED
+    // providers both used a bare id: the reverse walk writes the lower-precedence provider first,
+    // it claims the key, and the higher-precedence one is skipped. So
+    // `refresh({source:'modelsdev'})` returned azure's **$1/$6 deployment** price for
+    // `gpt-5.6-luna` where OpenAI's own listing says **$0.2/$1.2**. Four rows were affected, every
+    // one of them a host's listing displacing the lab's. Caught in cendor-prices by G6 (>2x
+    // day-over-day swing) — nothing offline had two allowlisted providers keying one model bare.
+    stub({
+      'models.dev': JSON.stringify({
+        azure: { models: { 'gpt-5.6-luna': { cost: { input: 1, output: 6 } } } }, //      index 12
+        openai: { models: { 'gpt-5.6-luna': { cost: { input: 0.2, output: 1.2 } } } }, // index 0
+      }),
+    });
+    expect(await prices.refresh(undefined, { source: 'modelsdev' })).toBe(true);
+    expect(prices.estimate('gpt-5.6-luna', 1_000_000).amount.equals(new Dec('0.2'))).toBe(true);
+    expect(
+      prices.estimate('gpt-5.6-luna', 0, { outputTokens: 1_000_000 }).amount.equals(new Dec('1.2')),
+    ).toBe(true);
+  });
+
+  it('modelsdev: a host-namespaced id still never overwrites a bare one', async () => {
+    // The rule the guard actually exists for, unchanged: a namespaced id names a HOST's listing and
+    // must not displace a direct naming even when its provider outranks the bare one's.
+    stub({
+      'models.dev': JSON.stringify({
+        azure: { models: { 'gpt-5.9': { cost: { input: 9, output: 9 } } } }, //        bare
+        openai: { models: { 'azure/gpt-5.9': { cost: { input: 1, output: 1 } } } }, // namespaced
+      }),
+    });
+    expect(await prices.refresh(undefined, { source: 'modelsdev' })).toBe(true);
+    expect(prices.estimate('gpt-5.9', 1_000_000).amount.equals(new Dec('9'))).toBe(true);
+  });
+
   it('ignores providers outside the allowlist entirely', async () => {
     stub({ 'models.dev': '{"nano-gpt": {"models": {"only-here": {"cost": {"input": 1}}}}}' });
     expect(await prices.refresh(undefined, { source: 'modelsdev' })).toBe(false);
@@ -549,6 +584,35 @@ describe('modelsdev / vercel / litellm', () => {
     await prices.refresh(undefined, { source: 'litellm' });
     expect(prices.models()).not.toContain('free-model');
     expect(() => prices.estimate('free-model', 1000)).toThrow(UnknownModelError);
+  });
+
+  it('openrouter: the string-"0" free tier and the -1 router sentinel are dropped', async () => {
+    // The exact shape that carried BUG-openrouter-source-publishes-zero-input-rates (closed
+    // 2026-08-02). Every other mapper dropped a zero input rate, but `mapOpenrouter`'s guard was
+    // `pricing.prompt == null` and OpenRouter serves its free tier as the STRING "0", which is not
+    // null. 17 models priced 1M input tokens at $0.00 *as a fact*, so a USD budget cap never bound.
+    //
+    // ⚠️ Asserting "no row prices at $0" would go VACUOUSLY GREEN the day OpenRouter stops listing
+    // free models. The fixture carries the zero rows itself, so the DROP is what is pinned.
+    //
+    // `-1` is OpenRouter's own sentinel for a dynamically-routed model (`openrouter/auto` and four
+    // siblings, measured live 2026-08-02) — the model-router case that is never priceable. Same
+    // `<= 0` rule drops it.
+    stub({
+      'openrouter.ai': JSON.stringify({
+        data: [
+          { id: 'openai/gpt-4o', pricing: { prompt: '0.0000025', completion: '0.00001' } },
+          { id: 'meta/llama3:free', pricing: { prompt: '0', completion: '0' } },
+          { id: 'google/lyria-3-pro-preview', pricing: { prompt: '0', completion: '0.000002' } },
+          { id: 'openrouter/auto', pricing: { prompt: '-1', completion: '-1' } },
+        ],
+      }),
+    });
+    expect(await prices.refresh(undefined, { source: 'openrouter' })).toBe(true);
+    expect(prices.models()).toEqual(['gpt-4o']);
+    for (const absent of ['llama3:free', 'lyria-3-pro-preview', 'auto']) {
+      expect(() => prices.estimate(absent, 1_000_000)).toThrow(UnknownModelError);
+    }
   });
 
   it('a mapped source drops a row it cannot price', async () => {

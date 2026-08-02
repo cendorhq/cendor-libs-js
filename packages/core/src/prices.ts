@@ -571,7 +571,19 @@ function mapModelsdev(raw: DecimalJsonValue): Table {
       const input = rates.input;
       if (input === undefined || !input.greaterThan(0)) continue;
       const key = normalizeModelId(mid);
-      if (bare.has(key)) continue;
+      // A host listing must never overwrite a direct naming (see `isHostId`).
+      // ⚠️ The `&& isHostId(mid)` is LOAD-BEARING. Without it this guard INVERTED the precedence
+      // list above: when two allowlisted providers both key a model BARE, the reverse walk writes
+      // the lower-precedence one first, it claims `bare`, and the higher-precedence one is skipped.
+      // Measured 2026-08-02 on the live payload — `refresh({source:'modelsdev'})` returned azure's
+      // **$1/$6 deployment** price for `gpt-5.6-luna` instead of OpenAI's own **$0.2/$1.2**. Four
+      // rows were affected, every one a host's listing displacing the lab's:
+      //   gpt-5.6-luna $1/$6 -> $0.2/$1.2 · gpt-5.6-terra $2.5/$15 -> $2/$12
+      //   deepseek-v4-pro $1.74/$3.48 -> $0.435/$0.87 · deepseek-v4-flash $0.19/$0.51 -> $0.14/$0.28
+      // The two rules collide only when both ids are bare; precedence decides that case.
+      // (`mapLitellm` keeps the plain guard on purpose — its payload is a flat dict with no
+      // precedence order to appeal to, so "the first bare id wins" is the only rule there.)
+      if (bare.has(key) && isHostId(mid)) continue;
       if (!isHostId(mid)) bare.add(key);
       out[key] = rates;
       const lu = String((rec as RawObject).last_updated ?? '').slice(0, 10);
