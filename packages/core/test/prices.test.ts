@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Dec } from '../src/decimal.js';
-import { MissingRateError, UnknownModelError, prices } from '../src/index.js';
+import { InvalidRateError, MissingRateError, UnknownModelError, prices } from '../src/index.js';
 import { loadFixture } from './_fixtures.js';
 
 interface PriceCase {
@@ -250,6 +250,72 @@ describe('prices — unknown is not zero', () => {
   it('a missing input key raises the typed error', async () => {
     await table('{"headless": {"output": 0.00001}}');
     expect(() => prices.estimate('headless', 1000)).toThrow(/no INPUT rate/);
+  });
+
+  it('register refuses a negative rate on any key, and writes nothing', () => {
+    // A negative rate does not merely fail to bind a USD cap — it UN-binds one. Refused at the call
+    // that wrote it, like registerDeployment({like}) already is, so nothing is left in the table for
+    // a later estimate() to multiply into a negative Money. Measured on the published 3.7.0 before
+    // this fix: register('neg', {input: -1, output: -1}) then estimate at 1M/1M gave -2000000.
+    for (const rates of [
+      { input: -1, output: -1 },
+      { input: '0.000005', output: '-0.00001' }, //     only the OUTPUT side is negative
+      { input: '0.000005', output: '0.00001', cached: -1 },
+      { input: '0.000005', output: '0.00001', cache_write: new Dec('-0.5') },
+    ]) {
+      expect(() => prices.register('neg-model', rates)).toThrow(InvalidRateError);
+      expect(() => prices.register('neg-model', rates)).toThrow(/negative/);
+      expect(prices.models()).not.toContain('neg-model');
+    }
+    // ...and the unit-converting helper inherits it, since it writes through register().
+    expect(() =>
+      prices.registerModelPrice('neg-model', { input: -5, output: 10, per: '1M' }),
+    ).toThrow(InvalidRateError);
+    expect(prices.models()).not.toContain('neg-model');
+  });
+
+  it('register still honours a ZERO rate', () => {
+    // NEGATIVE CONTROL for the rule above, and the D5 boundary: 0 is a price a user may mean (a
+    // local model), a negative one is not. If this fails, the negative rule has overreached into the
+    // case the library deliberately does not second-guess.
+    prices.register('llama3-local', { input: 0, output: 0 });
+    expect(
+      prices.estimate('llama3-local', 1_000_000, { outputTokens: 1_000_000 }).amount.equals(0),
+    ).toBe(true);
+  });
+
+  it('a table negative rate is refused and the message names the VALUE, not "zero"', async () => {
+    // The refusal was already right for input; the sentence was false. A user reading "states a zero
+    // INPUT rate" greps their own table for a 0, does not find one, and concludes the error is wrong
+    // about their data. OpenRouter's -1 routing sentinel is the shape this arrives in.
+    await table('{"auto": {"input": -1, "output": -1}}');
+    expect(() => prices.estimate('auto', 1_000_000, { outputTokens: 1_000_000 })).toThrow(
+      /negative INPUT rate of -1/,
+    );
+    expect(() => prices.estimate('auto', 1_000_000)).not.toThrow(/zero INPUT rate/);
+
+    // Every key — a negative OUTPUT subtracts money just as effectively, and no spec fallback
+    // rescues a negative `cached` / `cache_write` either.
+    await table('{"m": {"input": 0.000005, "output": -0.00001}}');
+    expect(() => prices.estimate('m', 1000)).toThrow(/negative OUTPUT rate of -0.00001/);
+    await table('{"m": {"input": 0.000005, "output": 0.00001, "cached": -1}}');
+    expect(() => prices.estimate('m', 1000)).toThrow(/negative CACHED rate of -1/);
+    await table('{"m": {"input": 0.000005, "output": 0.00001, "cache_write": -1}}');
+    expect(() => prices.estimate('m', 1000)).toThrow(/negative CACHE_WRITE rate of -1/);
+  });
+
+  it('a negative rate can never produce a negative Money, by either reachable path', async () => {
+    await table(
+      '{"auto": {"input": -1, "output": -1}, "auto-ok": {"input": 0.000001, "output": 0.000002}}',
+    );
+    expect(() => prices.estimate('auto', 1_000_000, { outputTokens: 1_000_000 })).toThrow(
+      UnknownModelError, // MissingRateError, via the table path
+    );
+    expect(() => prices.register('auto', { input: -1, output: -1 })).toThrow(InvalidRateError);
+    // The neighbouring good row still prices — the refusal is per-model, not table-wide.
+    expect(
+      prices.estimate('auto-ok', 1_000_000, { outputTokens: 1_000_000 }).amount.equals(new Dec(3)),
+    ).toBe(true);
   });
 
   it('registerModelPrice is the documented escape and it works', async () => {

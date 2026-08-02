@@ -29,14 +29,17 @@ export class UnknownModelError extends Error {
  * a fabricated cost as a *fact* while a USD budget cap silently never binds. A rate **you**
  * registered is never second-guessed: `prices.register('llama3', { input: 0, output: 0 })` prices a
  * local model at zero because you said so. (Python parity: `prices.MissingRateError`.)
+ *
+ * A **negative** rate in a table is refused too, on every key, registered or not — see
+ * {@link InvalidRateError} for why a negative is not the same case as a zero.
  */
 export class MissingRateError extends UnknownModelError {
-  constructor(model: string, key: 'input' | 'output', why: string) {
+  constructor(model: string, key: RateKey, why: string) {
     const id = JSON.stringify(model);
     super(
-      `the price table ${why} for ${id}, so this call cannot be priced. An absent or zero rate is \
-indistinguishable from 'we do not know': pricing it as $0.00 would report a fabricated cost as a \
-fact, and a USD budget cap would silently never bind on it.
+      `the price table ${why} for ${id}, so this call cannot be priced. An absent, zero or negative \
+rate is indistinguishable from 'we do not know': pricing it as $0.00 would report a fabricated cost \
+as a fact, and a USD budget cap would silently never bind on it.
 Set the rate yourself:
     prices.registerModelPrice(${id}, { input: …, output: … })
     prices.register(${id}, { input: …, output: … })   // per-token
@@ -46,6 +49,39 @@ honoured, an absent one is not.`,
     this.name = 'MissingRateError';
   }
 }
+
+/**
+ * Thrown by the `register*` functions when a rate you passed cannot be a price.
+ *
+ * Today that means a **negative** rate. A plain `Error`, not a {@link MissingRateError}, because
+ * this is a bad *argument* caught at the call that made it rather than a table that cannot answer.
+ *
+ * ⚠️ Why a negative is refused where a **zero** is honoured, which looks inconsistent and is not.
+ * A zero is a price some models really have (a local model, an embedding's output side), so
+ * `register('llama3', { input: 0, output: 0 })` is a person stating a fact and the library does not
+ * second-guess it. No model has ever cost a negative amount to call. And the failure is worse than
+ * a fabricated zero rather than merely equal to it: a zero rate makes a USD `budget(...)` cap *fail
+ * to bind*, while a negative one **un-binds** it — the spend counter goes down, so a negative-rate
+ * model pays for other calls and the cap is further from firing after every one.
+ *
+ * OpenRouter is the reason this is reachable at all: it serves `-1` as its "price depends on which
+ * model gets routed" sentinel (`openrouter/auto` and four others). Every mapped
+ * `refresh({ source })` drops those rows, so no shipped data path produces one — this closes the two
+ * paths that are deliberately *not* mappers, `register()` and a pass-through table.
+ * (Python parity: `prices.InvalidRateError`.)
+ */
+export class InvalidRateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidRateError';
+  }
+}
+
+/** The rate keys a `prices/1` rate object may carry. */
+export type RateKey = 'input' | 'output' | 'cached' | 'cache_write';
+
+/** Every rate key, in the order the spec lists them. */
+const RATE_KEYS: readonly RateKey[] = ['input', 'output', 'cached', 'cache_write'];
 
 /**
  * Thrown by `refresh(url, { required: true })` when the fetch/parse/map failed.
@@ -203,12 +239,29 @@ function isRegisteredRate(model: string): boolean {
  * first output-bearing call rather than the first call is exactly the kind of late, partial signal
  * this rule exists to remove.
  *
- * Symmetric across the two rate keys with no defined fallback (`cached` and `cache_write` do have
- * one, stated in the spec, so their absence is a default and not a gap).
+ * Presence is required for the two rate keys with no defined fallback (`cached` and `cache_write` do
+ * have one, stated in the spec, so their absence is a default and not a gap). A **negative** value is
+ * refused on *every* key, including those two: no fallback rescues a rate that would subtract money,
+ * and unlike the zero case there is no registered-value carve-out to make — {@link register} refuses
+ * a negative outright, so one can only have arrived from a table.
  */
 function assertPriceable(r: Rates, model: string): void {
   if (r.input === undefined) throw new MissingRateError(model, 'input', 'has no INPUT rate');
-  if (r.input.lte(0) && !isRegisteredRate(model)) {
+  for (const key of RATE_KEYS) {
+    const value = r[key];
+    // ⚠️ Name the value, not the condition. The message used to say "states a zero INPUT rate" for
+    // any non-positive rate, so a table holding -1 produced a refusal a user would grep their own
+    // table for a 0, not find one, and conclude was wrong about their data. The refusal was right;
+    // the sentence was false.
+    if (value?.lt(0)) {
+      throw new MissingRateError(
+        model,
+        key,
+        `states a negative ${key.toUpperCase()} rate of ${value.toFixed()}`,
+      );
+    }
+  }
+  if (r.input.eq(0) && !isRegisteredRate(model)) {
     throw new MissingRateError(model, 'input', 'states a zero INPUT rate');
   }
   if (r.output === undefined) throw new MissingRateError(model, 'output', 'has no OUTPUT rate');
@@ -270,6 +323,12 @@ export interface RegisterRates {
  * (Python parity: `prices.register(model, rates)` per-token since `cendor-core` 1.15.0, plus
  * `prices.register_model_price(model, input=…, output=…, per="1M")` for the per-1M form.)
  *
+ * A rate of `0` is honoured — you said so, and some models really are free. A **negative** rate is
+ * refused here, at the call that wrote it, rather than surfacing as a negative `Money` on some later
+ * `estimate()`; see {@link InvalidRateError}.
+ *
+ * @throws {InvalidRateError} If any rate is negative.
+ *
  * @example
  * ```ts
  * import { prices } from '@cendor/core';
@@ -288,8 +347,33 @@ export function register(model: string, rates: RegisterRates): void {
     r.cache_write =
       rates.cache_write instanceof Dec ? rates.cache_write : new Dec(rates.cache_write);
   }
+  rejectNegative(model, r);
   registered[model] = r; // survives refresh(): re-applied after every table swap
   t.models[model] = r;
+}
+
+/**
+ * Refuse a negative rate at the call that wrote it — the only reachable entrance.
+ *
+ * Registration-time, matching {@link registerDeployment}, whose `like` already fails here rather than
+ * on the first call: an error at the line that states the wrong thing names the fix in the caller's
+ * own code, while one thrown from `estimate()` names a call site that is merely where the consequence
+ * showed up. Nothing is written when this throws, so the table is never left holding a rate the next
+ * `estimate()` would multiply.
+ */
+function rejectNegative(model: string, r: Rates): void {
+  const bad = RATE_KEYS.filter((k) => r[k] !== undefined && (r[k] as Decimal).lt(0));
+  if (bad.length === 0) return;
+  const shown = bad.map((k) => `${k}=${(r[k] as Decimal).toFixed()}`).join(', ');
+  throw new InvalidRateError(
+    `cannot register a negative price rate for ${JSON.stringify(model)}: ${shown}. No model costs a \
+negative amount to call, and a negative rate does not merely fail to bind a USD budget cap — it \
+UN-binds one, because the spend counter goes down and the model pays for other calls.
+A rate of 0 IS accepted (a local model really is free); a negative one is not.
+If this came from a price feed, that feed is telling you the model is not priceable — OpenRouter \
+serves -1 for a dynamically-routed model, for instance. Leave it unpriced and let estimate() throw \
+UnknownModelError, which every cendor caller already degrades to an honest null.`,
+  );
 }
 
 /** The unit a {@link RegisterModelPriceOptions} rate is quoted in. */
