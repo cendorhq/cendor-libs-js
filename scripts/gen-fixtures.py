@@ -78,12 +78,32 @@ def gen_prices() -> None:
         prices.estimate(unknown, 100, 100)
     except KeyError:
         err = True
+
+    # `prices/1`, changed 2026-08-02: an absent rate is UNKNOWN, never zero. Pinned across both
+    # languages here because it is a *behaviour* both ports must share, not a number — the TS twin
+    # reading this fixture is what stops one language pricing an unpriceable row at $0.00.
+    def _raises(fn) -> bool:
+        try:
+            fn()
+        except KeyError:
+            return True
+        return False
+
+    prices.register("fixture-no-output", {"input": Decimal("0.000005")})
+    missing_output = _raises(lambda: prices.estimate("fixture-no-output", 1000, 500))
+    # ...while a zero a USER registered is a person stating a fact, and stays honoured.
+    prices.register("fixture-free-local", {"input": 0, "output": 0})
+    free_local = str(prices.estimate("fixture-free-local", 1000, 500).amount)
+    prices._reset()
+
     payload = {
         "spec": "prices/1",
         "snapshotDate": prices.snapshot_date(),
         "models": prices.models(),
         "cases": out,
         "unknownModel": {"model": unknown, "raises": err},
+        "missingOutputRate": {"model": "fixture-no-output", "raises": missing_output},
+        "registeredZeroIsHonoured": {"model": "fixture-free-local", "amount": free_local},
     }
     (OUT / "prices.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"prices.json: {len(out)} cases")

@@ -17,6 +17,37 @@ export class UnknownModelError extends Error {
 }
 
 /**
+ * Thrown when a model IS in the table but its rates cannot price a call.
+ *
+ * A **subclass of** {@link UnknownModelError} on purpose: every caller that already handles "I
+ * cannot price this" keeps working unchanged — `instrument()`, `otel`, the LangChain handler and
+ * `tokenguard` all catch and fall back to an honest `null`/warn-once. Catch this specific type only
+ * when you want to tell *"no such model"* apart from *"known model, unusable rate"*.
+ *
+ * Thrown for a rate a **table** left absent, or an input rate a table states as `0` — both are
+ * indistinguishable from "we do not know", and {@link estimate} returning `$0.00` for them reports
+ * a fabricated cost as a *fact* while a USD budget cap silently never binds. A rate **you**
+ * registered is never second-guessed: `prices.register('llama3', { input: 0, output: 0 })` prices a
+ * local model at zero because you said so. (Python parity: `prices.MissingRateError`.)
+ */
+export class MissingRateError extends UnknownModelError {
+  constructor(model: string, key: 'input' | 'output', why: string) {
+    const id = JSON.stringify(model);
+    super(
+      `the price table ${why} for ${id}, so this call cannot be priced. An absent or zero rate is \
+indistinguishable from 'we do not know': pricing it as $0.00 would report a fabricated cost as a \
+fact, and a USD budget cap would silently never bind on it.
+Set the rate yourself:
+    prices.registerModelPrice(${id}, { input: …, output: … })
+    prices.register(${id}, { input: …, output: … })   // per-token
+If this model genuinely bills nothing for ${key}, say so explicitly — an explicit ${key}: 0 is \
+honoured, an absent one is not.`,
+    );
+    this.name = 'MissingRateError';
+  }
+}
+
+/**
  * Thrown by `refresh(url, { required: true })` when the fetch/parse/map failed.
  *
  * `refresh()` is contractually never-throw: it resolves `false` and leaves the last-good table
@@ -153,6 +184,36 @@ function ratesFor(model: string): Rates {
   return r;
 }
 
+/**
+ * Did *you* write these rates with `register`, rather than a table supplying them?
+ *
+ * The distinction is the whole reason a zero can be legal: the spec already says a user
+ * registration outranks any table, so `register('llama3', { input: 0, output: 0 })` is a person
+ * stating a fact, while a `0` arriving inside a fetched table is a parser having lost one.
+ */
+function isRegisteredRate(model: string): boolean {
+  return registered[model] !== undefined || registered[lookupId(model)] !== undefined;
+}
+
+/**
+ * Refuse rates that cannot price a call, instead of quietly treating the gap as free.
+ *
+ * Applied whenever {@link estimate} looks a model up — **not** only when the call happens to carry
+ * output tokens. A table that cannot price this model cannot price it, and finding that out on the
+ * first output-bearing call rather than the first call is exactly the kind of late, partial signal
+ * this rule exists to remove.
+ *
+ * Symmetric across the two rate keys with no defined fallback (`cached` and `cache_write` do have
+ * one, stated in the spec, so their absence is a default and not a gap).
+ */
+function assertPriceable(r: Rates, model: string): void {
+  if (r.input === undefined) throw new MissingRateError(model, 'input', 'has no INPUT rate');
+  if (r.input.lte(0) && !isRegisteredRate(model)) {
+    throw new MissingRateError(model, 'input', 'states a zero INPUT rate');
+  }
+  if (r.output === undefined) throw new MissingRateError(model, 'output', 'has no OUTPUT rate');
+}
+
 export interface EstimateOptions {
   outputTokens?: number;
   cachedTokens?: number;
@@ -178,12 +239,12 @@ export function estimate(model: string, inputTokens: number, opts: EstimateOptio
   const cachedTokens = opts.cachedTokens ?? 0;
   const cacheWriteTokens = opts.cacheWriteTokens ?? 0;
   const r = ratesFor(model);
+  assertPriceable(r, model); // an absent or zero-in-a-table rate is UNKNOWN, never free
   const cached = Math.min(Math.max(cachedTokens, 0), inputTokens); // cached ⊆ input; clamp defensively
-  const inputRate = r.input;
-  if (inputRate === undefined) throw new UnknownModelError(model);
+  const inputRate = r.input as Decimal;
   const cachedRate = 'cached' in r ? (r.cached as Decimal) : inputRate;
   const writeRate = 'cache_write' in r ? (r.cache_write as Decimal) : inputRate.times('1.25');
-  const outputRate = r.output ?? new Dec(0);
+  const outputRate = r.output as Decimal;
   const amount = inputRate
     .times(inputTokens - cached)
     .plus(outputRate.times(outputTokens))
@@ -337,9 +398,10 @@ export function registerDeployment(deployment: string, opts: RegisterDeploymentO
   // never heard of (a future rate category, or a hand-written `register()` dict), and dropping it
   // would silently under-price the deployment. `Decimal` is immutable, so sharing instances is safe.
   const copy: Rates = { ...base };
-  // A base with no `input` rate cannot price anything — `estimate` would raise later, which is the
-  // silent-unpriced outcome this function exists to prevent. Fail at registration instead.
-  if (copy.input === undefined) throw new UnknownModelError(opts.like);
+  // A base that cannot price a call — no `input`, a table-stated zero `input`, or no `output` —
+  // would make `estimate` throw later, which is the silent-unpriced outcome this function exists to
+  // prevent. Fail at registration instead. Throws {@link MissingRateError}.
+  assertPriceable(copy, opts.like);
   const t = ensureLoaded();
   if (!t.models) t.models = {};
   registered[deployment] = copy; // survives refresh(), exactly like register()
@@ -1052,6 +1114,14 @@ export async function refresh(url?: string, opts: RefreshOptions = {}): Promise<
   try {
     const raw = await fetcher(target, timeout, region);
     const data = adapter ? adapter(raw) : (raw as unknown as Table);
+    if (adapter && data && typeof data === 'object' && data.models) {
+      // A MAPPED source only. These adapters are the deliberate twins of the cendor-prices
+      // builder's, and the feed already applies this rule (`zero.mjs`) before publishing — so a row
+      // our own mapper cannot price should be absent here for the same reason it is absent there. A
+      // pass-through `refresh(url)` is a TABLE, not a mapper: we keep every row a user's own table
+      // states and let `estimate()` refuse the unpriceable ones by name.
+      dropUnpriceable(data.models);
+    }
     if (data && typeof data === 'object' && data.models && Object.keys(data.models).length > 0) {
       install(data, 'refreshed', name, target);
       return true;
@@ -1067,6 +1137,31 @@ export async function refresh(url?: string, opts: RefreshOptions = {}): Promise<
   if (required)
     throw new PriceRefreshError(`price refresh from ${JSON.stringify(target)} failed: ${detail}`);
   return false;
+}
+
+/**
+ * Drop rows a mapped source produced that cannot price a call. In place; returns the ids.
+ *
+ * The library mirror of `cendor-prices`' `dropZeroInput` + `dropMissingOutput`. Measured 2026-08-02
+ * against the live payloads: `refresh({ source: 'litellm' })` produced **10** rows with no output
+ * rate — including `gpt-image-1`, which OpenAI bills at $40 per 1M output tokens, so
+ * `estimate('gpt-image-1', 1e6, { outputTokens: 1e6 })` answered **$5.00** where the truth is
+ * **$45.00** — and `refresh({ source: 'azure' })` produced one (`fw-deepseek-v4-pro-ch`).
+ *
+ * A model no source can price is honestly **absent**, which is the plain `UnknownModelError` a
+ * caller already handles, rather than a half-priced row that survives to under-report money. An
+ * output rate a source explicitly states as `0` is kept: embeddings really do have one.
+ */
+function dropUnpriceable(models: Record<string, Rates>): string[] {
+  const dropped: string[] = [];
+  for (const [mid, r] of Object.entries(models)) {
+    const input = r?.input;
+    if (!r || input === undefined || new Dec(input).lte(0) || r.output === undefined) {
+      dropped.push(mid);
+    }
+  }
+  for (const mid of dropped) delete models[mid];
+  return dropped;
 }
 
 function install(data: Table, kind: string, name: string, url: string | null): void {

@@ -1037,5 +1037,13 @@
   "unknownModel": {
     "model": "totally-unknown-model-xyz",
     "raises": true
+  },
+  "missingOutputRate": {
+    "model": "fixture-no-output",
+    "raises": true
+  },
+  "registeredZeroIsHonoured": {
+    "model": "fixture-free-local",
+    "amount": "0.00"
   }
 }

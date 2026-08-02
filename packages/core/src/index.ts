@@ -31,4 +31,4 @@ export { currentTraceId, installTraceContext, trace } from './trace.js';
 export type { TraceContextStore } from './trace.js';
 
 export type { Compressor, EvictionStrategy, Handle, Sink, Subscriber } from './protocols.js';
-export { PriceRefreshError, UnknownModelError } from './prices.js';
+export { MissingRateError, PriceRefreshError, UnknownModelError } from './prices.js';

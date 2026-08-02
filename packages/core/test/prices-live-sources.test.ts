@@ -271,11 +271,45 @@ describe('azure — the Foundry Models rewrite', () => {
 const AWS_INDEX = JSON.stringify({
   regions: { 'us-east-1': { currentVersionUrl: '/offers/v1.0/aws/X/2/us-east-1/index.json' } },
 });
+/**
+ * Build an AWS offer file. `withOutput` mirrors the real ones — for every *input-tokens* product it
+ * appends the matching *output-tokens* product and term at 4x the rate.
+ *
+ * Not cosmetic. Since `@cendor/core` 3.7.0 a mapped row with no output rate is dropped as
+ * unpriceable, so an input-only fixture maps to an EMPTY table, `refresh()` resolves `false` and the
+ * bundled snapshot stays active — several of these tests would then have gone on passing while
+ * asserting against the bundled rates instead of the mapper's. Pass `withOutput: false` to exercise
+ * that drop on purpose. Twin of `_aws_file` in cendor-libs' `test_prices.py`.
+ */
 const awsFile = (
   products: Record<string, unknown>,
   terms: Record<string, unknown>,
   published = '2026-07-29T23:58:47Z',
-) => JSON.stringify({ publicationDate: published, products, terms: { OnDemand: terms } });
+  withOutput = true,
+) => {
+  const allProducts = { ...products };
+  const allTerms = { ...terms };
+  if (withOutput) {
+    for (const [sku, p] of Object.entries(products)) {
+      const attrs = (p as { attributes: Record<string, unknown> }).attributes;
+      if (attrs?.inferenceType !== 'Input tokens') continue; // cache rows carry a null inferenceType
+      const d = (terms[sku] as ReturnType<typeof dim>).t.priceDimensions.d;
+      allProducts[`${sku}o`] = {
+        attributes: {
+          ...attrs,
+          inferenceType: 'Output tokens',
+          usagetype: String(attrs.usagetype).replace('input-tokens', 'output-tokens'),
+        },
+      };
+      allTerms[`${sku}o`] = dim(new Dec(d.pricePerUnit.USD).times(4).toString(), d.unit);
+    }
+  }
+  return JSON.stringify({
+    publicationDate: published,
+    products: allProducts,
+    terms: { OnDemand: allTerms },
+  });
+};
 const dim = (usd: string, unit = '1K tokens') => ({
   t: { priceDimensions: { d: { unit, pricePerUnit: { USD: usd } } } },
 });
@@ -516,6 +550,25 @@ describe('modelsdev / vercel / litellm', () => {
     expect(prices.models()).not.toContain('free-model');
     expect(() => prices.estimate('free-model', 1000)).toThrow(UnknownModelError);
   });
+
+  it('a mapped source drops a row it cannot price', async () => {
+    // D4 — the library mirror of the feed's `dropMissingOutput`. Measured 2026-08-02 against the
+    // live payload: `refresh({source:'litellm'})` produced 10 such rows, `gpt-image-1` among them,
+    // and OpenAI bills that model $40 per 1M OUTPUT tokens. A row nothing can price is honestly
+    // ABSENT — the plain UnknownModelError a caller already handles — not half-priced.
+    stub({
+      'raw.githubusercontent.com': JSON.stringify({
+        'gpt-4o': { input_cost_per_token: 0.0000025, output_cost_per_token: 0.00001 },
+        'gpt-image-1': { input_cost_per_token: 0.000005 },
+      }),
+    });
+    expect(await prices.refresh(undefined, { source: 'litellm' })).toBe(true);
+    expect(prices.models()).toContain('gpt-4o');
+    expect(prices.models()).not.toContain('gpt-image-1');
+    expect(() => prices.estimate('gpt-image-1', 1000, { outputTokens: 500 })).toThrow(
+      UnknownModelError,
+    );
+  });
 });
 
 // ------------------------------------------------------------------------------- refresh(required)
@@ -609,14 +662,18 @@ describe('explain()', () => {
   it('flags a gateway resale source', async () => {
     stub({
       'ai-gateway.vercel.sh':
-        '{"data": [{"id": "gpt-4o", "type": "language", "pricing": {"input": "0.000003"}}]}',
+        '{"data": [{"id": "gpt-4o", "type": "language",' +
+        ' "pricing": {"input": "0.000003", "output": "0.000012"}}]}',
     });
     await prices.refresh(undefined, { source: 'vercel' });
     expect(prices.explain('gpt-4o').notes.some((n) => n.includes('RESALE'))).toBe(true);
   });
 
   it('flags an undatable table', async () => {
-    stub({ 'raw.githubusercontent.com': '{"gpt-4o": {"input_cost_per_token": 0.0000025}}' });
+    stub({
+      'raw.githubusercontent.com':
+        '{"gpt-4o": {"input_cost_per_token": 0.0000025, "output_cost_per_token": 0.00001}}',
+    });
     await prices.refresh(undefined, { source: 'litellm' });
     expect(prices.explain('gpt-4o').notes.some((n) => n.includes('no as-of date'))).toBe(true);
   });
@@ -667,7 +724,9 @@ describe('save() / load() — explicit, opt-in persistence', () => {
     const { join } = await import('node:path');
     const dir = await mkdtemp(join(tmpdir(), 'cendor-prices-'));
     try {
-      stub({ 'cendor-prices': '{"models": {"m": {"input": 0.000000123456789012345}}}' });
+      stub({
+        'cendor-prices': '{"models": {"m": {"input": 0.000000123456789012345, "output": 0}}}',
+      });
       await prices.refresh();
       const path = await prices.save(join(dir, 'p.json'));
       expect(await readFile(path, 'utf8')).toContain('0.000000123456789012345');
@@ -745,7 +804,9 @@ describe('a pass-through refresh(url) with STRING rates', () => {
   it('the live feed itself parses into Decimals (the schema is number literals)', async () => {
     // `prices/1` specifies JSON number literals; the feed emits them, and `parseDecimalJson` reads
     // the token text verbatim so 0.000000123456789012345 survives to the last digit.
-    stub({ 'cendor-prices': '{"models": {"m": {"input": 0.000000123456789012345}}}' });
+    stub({
+      'cendor-prices': '{"models": {"m": {"input": 0.000000123456789012345, "output": 0}}}',
+    });
     await prices.refresh();
     expect(prices.estimate('m', 1_000_000).amount.equals(new Dec('0.123456789012345'))).toBe(true);
   });
