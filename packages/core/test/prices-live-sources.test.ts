@@ -552,7 +552,11 @@ describe('the default refresh() target', () => {
     });
     expect(await prices.refresh()).toBe(true);
     expect(seen[0]).toBe(prices.SNAPSHOT_URL);
-    expect(prices.SNAPSHOT_URL).toContain('cendorhq/cendor-prices');
+    expect(prices.SNAPSHOT_URL).toContain('cendor-prices');
+    // A PAGES url, not raw.githubusercontent: the builder repo is private, so the raw URL needs
+    // auth and 404s. A data-only gh-pages branch publishes the file itself, keyless.
+    expect(prices.SNAPSHOT_URL.startsWith('https://cendorhq.github.io/')).toBe(true);
+    expect(prices.SNAPSHOT_URL).not.toContain('raw.githubusercontent');
     expect(prices.sourceName()).toBe('feed');
   });
 

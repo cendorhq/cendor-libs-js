@@ -50,11 +50,15 @@ const registered: Record<string, Rates> = {};
 /**
  * Default table used by `refresh()` when no url or source is given: the **cendor-prices feed** — a
  * dated, per-row-provenanced `prices/1` table rebuilt daily behind validation gates and served by
- * GitHub's CDN. Cendor operates no server for this; it is a static file in a public repo, so a
- * Cendor outage cannot exist to break your cost estimation.
+ * GitHub Pages. Cendor operates no server for this; it is a static file on GitHub's CDN, so no
+ * Cendor outage can exist to break your cost estimation.
+ *
+ * ⚠️ It is a **Pages** URL, not `raw.githubusercontent`. The builder repo is private — the source,
+ * the curation policy and the run history are internal — while a data-only `gh-pages` branch
+ * publishes the file itself, keyless. Pages also serves it as `application/json` rather than raw's
+ * `text/plain`. Do not "correct" this back to a raw URL: that one needs auth and 404s.
  */
-export const SNAPSHOT_URL =
-  'https://raw.githubusercontent.com/cendorhq/cendor-prices/main/prices.json';
+export const SNAPSHOT_URL = 'https://cendorhq.github.io/cendor-prices/prices.json';
 export const LITELLM_URL =
   'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json';
 /** OpenRouter's public model catalog. Gateway **resale** prices: what OpenRouter charges you. */
