@@ -93,7 +93,7 @@ jobs:
       # createGithubReleases is off to preserve existing behaviour — today the npm side ships tags but
       # no GitHub Releases. Turning it on is a reasonable follow-up, not part of this change.
       - name: Version PR, or publish a merged one
-        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
           version: pnpm exec changeset version
           publish: pnpm exec changeset publish
